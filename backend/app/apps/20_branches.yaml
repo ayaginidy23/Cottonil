@@ -1,0 +1,203 @@
+id: branches
+title: Branch Performance & P&L
+group: Branches
+order: 20
+icon: store
+description: How much every branch sells and how much it really earns - gross margin after returns minus operating expenses, payroll and transfer costs (P&L = profit and loss). Costs are not split by sales channel, so the channel filter applies only to the sales KPIs and the retail-vs-reseller chart.
+
+# Default columns = the monthly P&L mart; the sales KPIs override them (fact_orders).
+columns:
+  month: p.month_start
+  branch: p.branch_id
+
+kpis:
+  - id: sales_per_branch
+    columns: {date: f.order_date, branch: f.branch_id, channel: f.sales_channel}
+    label: Avg net sales per branch
+    format: egp
+    sql: |
+      SELECT SUM(f.net_sales_after_returns_egp) / NULLIF(COUNT(DISTINCT f.branch_id), 0) AS value
+      FROM gold.fact_orders f WHERE {where} AND f.branch_id IS NOT NULL
+  - id: aov
+    columns: {date: f.order_date, branch: f.branch_id, channel: f.sales_channel}
+    label: Avg basket
+    format: egp
+    sql: |
+      SELECT AVG(f.net_sales_egp) AS value FROM gold.fact_orders f WHERE {where} AND f.branch_id IS NOT NULL
+  - id: top_branch_share
+    columns: {date: f.order_date, branch: f.branch_id, channel: f.sales_channel}
+    label: Top 10 branches' share
+    format: pct
+    sql: |
+      SELECT SUM(s) FILTER (WHERE rnk <= 10) / NULLIF(SUM(s), 0) AS value FROM (
+          SELECT SUM(f.net_sales_after_returns_egp) AS s,
+                 RANK() OVER (ORDER BY SUM(f.net_sales_after_returns_egp) DESC) AS rnk
+          FROM gold.fact_orders f WHERE {where} AND f.branch_id IS NOT NULL GROUP BY f.branch_id
+      ) x
+  - id: operating_profit
+    label: Operating profit
+    format: egp
+    sql: |
+      SELECT SUM(p.operating_profit_egp) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: operating_margin
+    label: Operating margin
+    format: pct
+    hint: Operating profit / net sales
+    sql: |
+      SELECT SUM(p.operating_profit_egp) / NULLIF(SUM(p.net_sales_after_returns_egp), 0) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: opex
+    label: Operating expenses
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(p.opex_egp) AS value FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: payroll
+    label: Payroll
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(p.payroll_egp) AS value FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: cost_to_sales
+    label: Cost-to-sales ratio
+    format: pct
+    good: down
+    hint: (Opex + payroll + transfers) / net sales
+    sql: |
+      SELECT SUM(p.opex_egp + p.payroll_egp + p.transfer_cost_egp)
+             / NULLIF(SUM(p.net_sales_after_returns_egp), 0) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: loss_branches
+    label: Loss-making branches
+    format: number
+    good: down
+    sql: |
+      SELECT COUNT(*) AS value FROM (
+          SELECT p.branch_id, SUM(p.operating_profit_egp) AS profit
+          FROM gold.mart_branch_pnl_monthly p WHERE {where}
+          GROUP BY p.branch_id
+      ) x WHERE profit < 0
+
+charts:
+  - id: pnl_bridge
+    title: From gross margin to operating profit
+    type: bar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: EGP}]
+    sql: |
+      SELECT 1 AS ord, 'Gross margin' AS label, SUM(p.gross_margin_egp) AS value
+        FROM gold.mart_branch_pnl_monthly p WHERE {where}
+      UNION ALL
+      SELECT 2, 'Operating expenses', -SUM(p.opex_egp) FROM gold.mart_branch_pnl_monthly p WHERE {where}
+      UNION ALL
+      SELECT 3, 'Payroll', -SUM(p.payroll_egp) FROM gold.mart_branch_pnl_monthly p WHERE {where}
+      UNION ALL
+      SELECT 4, 'Transfer cost', -SUM(p.transfer_cost_egp) FROM gold.mart_branch_pnl_monthly p WHERE {where}
+      UNION ALL
+      SELECT 5, 'Operating profit', SUM(p.operating_profit_egp) FROM gold.mart_branch_pnl_monthly p WHERE {where}
+      ORDER BY ord
+
+  - id: monthly_profit
+    title: Monthly operating profit vs costs
+    type: line
+    width: half
+    format: egp
+    x: month
+    series:
+      - {key: gross_margin, label: Gross margin}
+      - {key: costs, label: Opex + payroll + transfers}
+      - {key: operating_profit, label: Operating profit}
+    sql: |
+      SELECT p.month_start AS month,
+             SUM(p.gross_margin_egp) AS gross_margin,
+             SUM(p.opex_egp + p.payroll_egp + p.transfer_cost_egp) AS costs,
+             SUM(p.operating_profit_egp) AS operating_profit
+      FROM gold.mart_branch_pnl_monthly p
+      JOIN gold.dim_date d ON d.date_key = p.month_start
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: top_branches
+    title: Top 10 most profitable branches
+    type: hbar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Operating profit}]
+    sql: |
+      SELECT b.branch_display_name AS label, SUM(p.operating_profit_egp) AS value
+      FROM gold.mart_branch_pnl_monthly p
+      JOIN gold.dim_branch b ON b.branch_id = p.branch_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+
+  - id: bottom_branches
+    title: 10 least profitable branches
+    type: hbar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Operating profit}]
+    sql: |
+      SELECT b.branch_display_name AS label, SUM(p.operating_profit_egp) AS value
+      FROM gold.mart_branch_pnl_monthly p
+      JOIN gold.dim_branch b ON b.branch_id = p.branch_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 ASC LIMIT 10
+
+  - id: by_type_monthly
+    title: Monthly sales - retail branches vs reseller points
+    type: line
+    width: full
+    format: egp
+    x: month
+    series:
+      - {key: retail, label: Retail branch}
+      - {key: reseller, label: Point of sale / reseller}
+    columns: {date: m.order_date, branch: m.branch_id, channel: m.sales_channel}
+    sql: |
+      SELECT m.month_start AS month,
+             SUM(m.net_sales_after_returns_egp) FILTER (WHERE b.retail_location_type = 'Retail branch') AS retail,
+             SUM(m.net_sales_after_returns_egp) FILTER (WHERE b.retail_location_type <> 'Retail branch') AS reseller
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_branch b ON b.branch_id = m.branch_id
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: branch_scorecard
+    title: Branch scorecard - sales, costs and profit
+    type: table
+    width: full
+    table_columns:
+      - {key: branch, label: Branch}
+      - {key: governorate, label: Governorate}
+      - {key: type, label: Type}
+      - {key: orders, label: Orders, format: number}
+      - {key: net_sales, label: Net sales, format: egp}
+      - {key: aov, label: Avg basket, format: egp}
+      - {key: gross_margin, label: Gross margin, format: egp}
+      - {key: opex, label: Opex, format: egp}
+      - {key: payroll, label: Payroll, format: egp}
+      - {key: transfer_cost, label: Transfer cost, format: egp}
+      - {key: operating_profit, label: Operating profit, format: egp}
+      - {key: operating_margin, label: Op. margin, format: pct}
+      - {key: employees, label: Employees, format: number}
+    sql: |
+      SELECT b.branch_display_name AS branch, b.governorate_ar AS governorate,
+             b.retail_location_type AS type,
+             SUM(p.orders)                      AS orders,
+             SUM(p.net_sales_after_returns_egp) AS net_sales,
+             SUM(p.net_sales_egp) / NULLIF(SUM(p.orders), 0) AS aov,
+             SUM(p.gross_margin_egp)            AS gross_margin,
+             SUM(p.opex_egp)                    AS opex,
+             SUM(p.payroll_egp)                 AS payroll,
+             SUM(p.transfer_cost_egp)           AS transfer_cost,
+             SUM(p.operating_profit_egp)        AS operating_profit,
+             SUM(p.operating_profit_egp) / NULLIF(SUM(p.net_sales_after_returns_egp), 0) AS operating_margin,
+             MAX(b.employees)                   AS employees
+      FROM gold.mart_branch_pnl_monthly p
+      JOIN gold.dim_branch b ON b.branch_id = p.branch_id
+      WHERE {where}
+      GROUP BY 1, 2, 3 ORDER BY operating_profit DESC

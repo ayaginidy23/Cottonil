@@ -1,0 +1,196 @@
+id: size_color_returns
+title: Size, Colour & Returns
+group: Products
+order: 41
+icon: shirt
+description: Which sizes and colours sell, the size mix per category (input for buying), and what comes back - return rate, refunds and how fast items are returned. Return reasons in this data are evenly spread (generated), so they are shown for completeness.
+
+columns:
+  date: s.order_date
+  branch: s.branch_id
+  channel: s.sales_channel
+
+kpis:
+  - id: top_size
+    label: Best-selling size
+    format: text
+    compare: false
+    sql: |
+      SELECT p.size AS value FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY p.size ORDER BY SUM(s.quantity) DESC LIMIT 1
+  - id: top_size_share
+    label: Units in the top 3 sizes
+    format: pct
+    sql: |
+      SELECT SUM(u) FILTER (WHERE rnk <= 3) / NULLIF(SUM(u), 0) AS value FROM (
+          SELECT SUM(s.quantity)::NUMERIC AS u, RANK() OVER (ORDER BY SUM(s.quantity) DESC) AS rnk
+          FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+          WHERE {where} GROUP BY p.size
+      ) x
+  - id: kids_share
+    label: Kids sizes share of units
+    format: pct
+    sql: |
+      SELECT SUM(s.quantity) FILTER (WHERE p.size_group = 'Kids (age)')::NUMERIC / NULLIF(SUM(s.quantity), 0) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id WHERE {where}
+  - id: top_color
+    label: Best-selling colour
+    format: text
+    compare: false
+    sql: |
+      SELECT p.color_ar AS value FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY p.color_ar ORDER BY SUM(s.quantity) DESC LIMIT 1
+  - id: unit_return_rate
+    label: Unit return rate
+    format: pct
+    good: down
+    sql: |
+      SELECT SUM(s.returned_units)::NUMERIC / NULLIF(SUM(s.quantity), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: refunds
+    label: Refunds (capped)
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(s.refund_egp) AS value FROM gold.fact_sales_line s WHERE {where}
+  - id: refund_pct
+    label: Refunds as % of sales
+    format: pct
+    good: down
+    sql: |
+      SELECT SUM(s.refund_egp) / NULLIF(SUM(s.net_sales_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: full_returns
+    label: Fully returned orders
+    format: number
+    good: down
+    columns: {date: f.order_date, branch: f.branch_id, channel: f.sales_channel}
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_orders f WHERE {where} AND f.return_level = 'full'
+  - id: days_to_return
+    label: Avg days to return
+    format: days
+    columns: {date: r.order_date, branch: r.branch_id, channel: r.sales_channel}
+    sql: |
+      SELECT AVG(r.days_to_return) AS value FROM gold.fact_returns r WHERE {where}
+
+charts:
+  - id: units_by_size
+    title: Units sold by size
+    type: bar
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Units}]
+    sql: |
+      SELECT p.size AS label, SUM(s.quantity) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where}
+      GROUP BY p.size
+      ORDER BY CASE p.size WHEN 'XS' THEN 1 WHEN 'S' THEN 2 WHEN 'M' THEN 3 WHEN 'L' THEN 4 WHEN 'XL' THEN 5
+                           WHEN '2XL' THEN 6 WHEN '3XL' THEN 7 WHEN '4XL' THEN 8 WHEN 'Free' THEN 9
+                           ELSE 20 END,
+               CASE WHEN p.size ~ '^[0-9]+$' THEN p.size::INT END
+
+  - id: price_by_size
+    title: Avg selling price by size
+    type: bar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Avg price / unit}]
+    sql: |
+      SELECT p.size AS label, SUM(s.net_sales_egp) / NULLIF(SUM(s.quantity), 0) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: units_by_color
+    title: Units sold by colour
+    type: hbar
+    width: third
+    format: number
+    x: label
+    series: [{key: value, label: Units}]
+    sql: |
+      SELECT p.color_ar AS label, SUM(s.quantity) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: size_groups
+    title: Units by size group
+    type: donut
+    width: third
+    format: number
+    x: label
+    series: [{key: value, label: Units}]
+    sql: |
+      SELECT p.size_group AS label, SUM(s.quantity) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: days_buckets
+    title: How fast items come back
+    type: bar
+    width: third
+    format: number
+    x: bucket
+    series: [{key: returns, label: Returns}]
+    columns: {date: r.order_date, branch: r.branch_id, channel: r.sales_channel}
+    sql: |
+      SELECT CASE WHEN r.days_to_return <= 1 THEN '1. 0-1 days' WHEN r.days_to_return <= 7 THEN '2. 2-7 days'
+                  WHEN r.days_to_return <= 14 THEN '3. 8-14 days' WHEN r.days_to_return <= 30 THEN '4. 15-30 days'
+                  ELSE '5. 30+ days' END AS bucket,
+             COUNT(*) AS returns
+      FROM gold.fact_returns r WHERE {where} GROUP BY 1 ORDER BY 1
+
+  - id: monthly_rate
+    title: Monthly unit return rate
+    type: line
+    width: full
+    format: pct
+    x: month
+    series: [{key: rate, label: Return rate}]
+    sql: |
+      SELECT s.month_start AS month, SUM(s.returned_units)::NUMERIC / NULLIF(SUM(s.quantity), 0) AS rate
+      FROM gold.fact_sales_line s JOIN gold.dim_date d ON d.date_key = s.month_start
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: rate_by_channel
+    title: Return rate by channel
+    type: bar
+    width: half
+    format: pct
+    x: label
+    series: [{key: value, label: Return rate}]
+    sql: |
+      SELECT s.sales_channel AS label, SUM(s.returned_units)::NUMERIC / NULLIF(SUM(s.quantity), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: reasons
+    title: Return reasons
+    type: donut
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Returns}]
+    columns: {date: r.order_date, branch: r.branch_id, channel: r.sales_channel}
+    sql: |
+      SELECT r.reason AS label, COUNT(*) AS value FROM gold.fact_returns r WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: size_curve
+    title: Size curve per category (share of category units)
+    type: table
+    width: full
+    table_columns:
+      - {key: category, label: Category}
+      - {key: size, label: Size}
+      - {key: units, label: Units, format: number}
+      - {key: share, label: Share of category, format: pct}
+      - {key: return_rate, label: Return rate, format: pct}
+    sql: |
+      SELECT p.category, p.size, SUM(s.quantity) AS units,
+             SUM(s.quantity)::NUMERIC / NULLIF(SUM(SUM(s.quantity)) OVER (PARTITION BY p.category), 0) AS share,
+             SUM(s.returned_units)::NUMERIC / NULLIF(SUM(s.quantity), 0) AS return_rate
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1, 2 ORDER BY 1, units DESC

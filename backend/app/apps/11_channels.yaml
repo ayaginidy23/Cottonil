@@ -1,0 +1,172 @@
+id: channels
+title: Channels & Wholesale
+group: Sales
+order: 11
+icon: store
+description: Retail stores, e-commerce and wholesale side by side - share, basket size, guests and the channel scorecard - plus what drives the wholesale / reseller channel (categories, branches, customer types). Wholesale charts always show the wholesale channel, so the channel filter does not apply to them.
+
+columns:
+  date: f.order_date
+  branch: f.branch_id
+  channel: f.sales_channel
+
+kpis:
+  - id: ecom_share
+    label: E-commerce share of sales
+    format: pct
+    sql: |
+      SELECT SUM(CASE WHEN f.sales_channel = 'E-commerce' THEN f.net_sales_after_returns_egp ELSE 0 END)
+             / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_orders f WHERE {where}
+  - id: wholesale_share
+    columns: {date: f.order_date, branch: f.branch_id}
+    label: Share of total sales
+    format: pct
+    sql: |
+      SELECT SUM(f.net_sales_after_returns_egp) FILTER (WHERE f.sales_channel = 'Wholesale / reseller')
+             / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_orders f WHERE {where}
+  - id: pos_aov
+    label: Store (POS) avg order
+    format: egp
+    sql: |
+      SELECT AVG(f.net_sales_egp) AS value FROM gold.fact_orders f
+      WHERE {where} AND f.sales_channel = 'Retail POS'
+  - id: ecom_aov
+    label: E-commerce avg order
+    format: egp
+    sql: |
+      SELECT AVG(f.net_sales_egp) AS value FROM gold.fact_orders f
+      WHERE {where} AND f.sales_channel = 'E-commerce'
+  - id: wholesale_aov
+    label: Wholesale avg order
+    format: egp
+    sql: |
+      SELECT AVG(f.net_sales_egp) AS value FROM gold.fact_orders f
+      WHERE {where} AND f.sales_channel = 'Wholesale / reseller'
+  - id: guest_share
+    label: Guest (unregistered) orders
+    format: pct
+    good: down
+    sql: |
+      SELECT AVG(CASE WHEN f.is_guest THEN 1.0 ELSE 0 END) AS value FROM gold.fact_orders f WHERE {where}
+  - id: b2b_share
+    columns: {date: f.order_date, branch: f.branch_id}
+    label: Orders from B2B customers
+    format: pct
+    sql: |
+      SELECT AVG(CASE WHEN c.customer_segment = 'B2B reseller' THEN 1.0 ELSE 0 END) AS value
+      FROM gold.fact_orders f JOIN gold.dim_customer c ON c.customer_key = f.customer_key
+      WHERE {where} AND f.sales_channel = 'Wholesale / reseller'
+
+charts:
+  - id: monthly_by_channel
+    title: Monthly net sales by channel
+    type: line
+    width: full
+    format: egp
+    x: month
+    series:
+      - {key: retail_pos, label: Retail POS}
+      - {key: ecommerce, label: E-commerce}
+      - {key: wholesale, label: Wholesale / reseller}
+    columns: {date: m.order_date, branch: m.branch_id, channel: m.sales_channel}
+    sql: |
+      SELECT m.month_start AS month,
+             SUM(m.net_sales_after_returns_egp) FILTER (WHERE m.sales_channel = 'Retail POS')           AS retail_pos,
+             SUM(m.net_sales_after_returns_egp) FILTER (WHERE m.sales_channel = 'E-commerce')           AS ecommerce,
+             SUM(m.net_sales_after_returns_egp) FILTER (WHERE m.sales_channel = 'Wholesale / reseller') AS wholesale
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: channel_table
+    title: Channel scorecard
+    type: table
+    width: full
+    table_columns:
+      - {key: channel, label: Channel}
+      - {key: orders, label: Orders, format: number}
+      - {key: net_sales, label: Net sales, format: egp}
+      - {key: aov, label: Avg order, format: egp}
+      - {key: units_per_order, label: Units / order, format: decimal}
+      - {key: discount_rate, label: Discount rate, format: pct}
+      - {key: guest_share, label: Guest orders, format: pct}
+      - {key: return_rate, label: Orders with return, format: pct}
+      - {key: margin_pct, label: Gross margin, format: pct}
+    sql: |
+      SELECT f.sales_channel AS channel,
+             COUNT(*) AS orders,
+             SUM(f.net_sales_after_returns_egp) AS net_sales,
+             AVG(f.net_sales_egp) AS aov,
+             AVG(f.sold_units) AS units_per_order,
+             SUM(f.discount_egp) / NULLIF(SUM(f.gross_egp), 0) AS discount_rate,
+             AVG(CASE WHEN f.is_guest THEN 1.0 ELSE 0 END) AS guest_share,
+             AVG(CASE WHEN f.has_return THEN 1.0 ELSE 0 END) AS return_rate,
+             SUM(f.margin_after_returns_egp) / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS margin_pct
+      FROM gold.fact_orders f WHERE {where}
+      GROUP BY 1 ORDER BY net_sales DESC
+
+  - id: by_category
+    title: Wholesale sales by category
+    type: hbar
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Net sales}]
+    columns: {date: s.order_date, branch: s.branch_id}
+    sql: |
+      SELECT p.category AS label, SUM(s.net_sales_after_returns_egp) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} AND s.sales_channel = 'Wholesale / reseller'
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: by_location_type
+    columns: {date: f.order_date, branch: f.branch_id}
+    title: Wholesale sales - retail branches vs reseller points
+    type: donut
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Net sales}]
+    sql: |
+      SELECT b.retail_location_type AS label, SUM(f.net_sales_after_returns_egp) AS value
+      FROM gold.fact_orders f JOIN gold.dim_branch b ON b.branch_id = f.branch_id
+      WHERE {where} AND f.sales_channel = 'Wholesale / reseller'
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: by_segment
+    columns: {date: f.order_date, branch: f.branch_id}
+    title: Wholesale orders by customer type
+    type: donut
+    width: third
+    format: number
+    x: label
+    series: [{key: value, label: Orders}]
+    sql: |
+      SELECT c.customer_segment AS label, COUNT(*) AS value
+      FROM gold.fact_orders f JOIN gold.dim_customer c ON c.customer_key = f.customer_key
+      WHERE {where} AND f.sales_channel = 'Wholesale / reseller'
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: top_branches
+    columns: {date: f.order_date, branch: f.branch_id}
+    title: Branches by wholesale sales
+    type: table
+    width: full
+    table_columns:
+      - {key: branch, label: Branch}
+      - {key: type, label: Type}
+      - {key: governorate, label: Governorate}
+      - {key: orders, label: Orders, format: number}
+      - {key: net_sales, label: Wholesale sales, format: egp}
+      - {key: aov, label: Avg order, format: egp}
+      - {key: margin_pct, label: Margin, format: pct}
+    sql: |
+      SELECT b.branch_display_name AS branch, b.retail_location_type AS type, b.governorate_ar AS governorate,
+             COUNT(*) AS orders, SUM(f.net_sales_after_returns_egp) AS net_sales, AVG(f.net_sales_egp) AS aov,
+             SUM(f.margin_after_returns_egp) / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS margin_pct
+      FROM gold.fact_orders f JOIN gold.dim_branch b ON b.branch_id = f.branch_id
+      WHERE {where} AND f.sales_channel = 'Wholesale / reseller'
+      GROUP BY 1, 2, 3 ORDER BY net_sales DESC LIMIT 25

@@ -1,0 +1,140 @@
+id: procurement_imports
+title: Procurement & Imports
+group: Inventory & Supply Chain
+order: 51
+icon: clipboard-list
+description: Buying the goods - local suppliers (spend, lead times, partial deliveries, payment terms) and imports (what goods really cost once they arrive - customs value plus freight plus duties, in USD). Purchases and imports are generated on a different scale than sales, so they are analysed on their own, not compared with sales.
+
+# Default columns = purchases; import items override them with the shipment date.
+columns:
+  date: f.po_date
+
+kpis:
+  - id: spend
+    label: Purchase spend
+    format: egp
+    sql: |
+      SELECT SUM(f.line_cost_egp) AS value FROM gold.fact_purchases f WHERE {where}
+  - id: pos
+    label: Purchase orders
+    format: number
+    sql: |
+      SELECT COUNT(DISTINCT f.po_id) AS value FROM gold.fact_purchases f WHERE {where}
+  - id: suppliers
+    label: Active suppliers
+    format: number
+    sql: |
+      SELECT COUNT(DISTINCT f.supplier_id) AS value FROM gold.fact_purchases f WHERE {where}
+  - id: lead_time
+    label: Avg lead time
+    format: days
+    good: down
+    sql: |
+      SELECT AVG(f.lead_time_days) AS value FROM gold.fact_purchases f WHERE {where}
+  - id: partial_rate
+    label: POs only partly received
+    format: pct
+    good: down
+    sql: |
+      SELECT COUNT(DISTINCT f.po_id) FILTER (WHERE f.po_status = 'Partial receipt')::NUMERIC
+             / NULLIF(COUNT(DISTINCT f.po_id), 0) AS value
+      FROM gold.fact_purchases f WHERE {where}
+  - id: payment_terms
+    label: Avg payment terms
+    format: days
+    sql: |
+      SELECT SUM(f.payment_terms_days * f.line_cost_egp) / NULLIF(SUM(f.line_cost_egp), 0) AS value
+      FROM gold.fact_purchases f WHERE {where}
+  - id: shipments
+    columns: {date: x.shipment_date}
+    label: Import shipments
+    format: number
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_imports x WHERE {where}
+  - id: landed_cost
+    columns: {date: x.shipment_date}
+    label: Landed cost
+    format: usd
+    sql: |
+      SELECT SUM(x.landed_cost_usd) AS value FROM gold.fact_imports x WHERE {where}
+  - id: overhead
+    columns: {date: x.shipment_date}
+    label: Freight + duty overhead
+    format: pct
+    good: down
+    hint: (Freight + duty) / goods value
+    sql: |
+      SELECT SUM(x.freight_usd + x.duty_and_tax_usd) / NULLIF(SUM(x.customs_value_usd), 0) AS value
+      FROM gold.fact_imports x WHERE {where}
+
+charts:
+  - id: monthly_spend
+    title: Monthly purchase spend
+    type: area
+    width: half
+    format: egp
+    x: month
+    series: [{key: spend, label: Spend}]
+    sql: |
+      SELECT f.month_start AS month, SUM(f.line_cost_egp) AS spend
+      FROM gold.fact_purchases f JOIN gold.dim_date d ON d.date_key = f.month_start
+      WHERE {where} AND d.is_complete_month GROUP BY 1 ORDER BY 1
+
+  - id: composition
+    columns: {date: x.shipment_date}
+    title: Landed cost composition by commodity
+    type: bar
+    width: half
+    format: usd
+    x: label
+    series:
+      - {key: goods, label: Goods value}
+      - {key: freight, label: Freight}
+      - {key: duty, label: Duty & tax}
+    sql: |
+      SELECT x.commodity_class AS label, SUM(x.customs_value_usd) AS goods,
+             SUM(x.freight_usd) AS freight, SUM(x.duty_and_tax_usd) AS duty
+      FROM gold.fact_imports x WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: scorecard
+    title: Supplier scorecard
+    type: table
+    width: full
+    table_columns:
+      - {key: supplier, label: Supplier}
+      - {key: material, label: Material}
+      - {key: location, label: Location}
+      - {key: spend, label: Spend, format: egp}
+      - {key: pos, label: POs, format: number}
+      - {key: lead_time, label: Avg lead time, format: days}
+      - {key: partial_rate, label: Partial receipts, format: pct}
+      - {key: terms, label: Payment terms, format: days}
+    sql: |
+      SELECT s.supplier_name_ar AS supplier, s.material_type AS material, s.city_country AS location,
+             SUM(f.line_cost_egp) AS spend, COUNT(DISTINCT f.po_id) AS pos,
+             AVG(f.lead_time_days) AS lead_time,
+             COUNT(DISTINCT f.po_id) FILTER (WHERE f.po_status = 'Partial receipt')::NUMERIC
+               / NULLIF(COUNT(DISTINCT f.po_id), 0) AS partial_rate,
+             MAX(s.payment_terms_days) AS terms
+      FROM gold.fact_purchases f JOIN gold.dim_supplier s ON s.supplier_id = f.supplier_id
+      WHERE {where} GROUP BY 1, 2, 3 ORDER BY spend DESC
+
+  - id: partners
+    columns: {date: x.shipment_date}
+    title: Import partners
+    type: table
+    width: full
+    table_columns:
+      - {key: partner, label: Partner}
+      - {key: country, label: Country}
+      - {key: goods, label: Goods category}
+      - {key: terms, label: Terms}
+      - {key: shipments, label: Shipments, format: number}
+      - {key: customs, label: Goods value, format: usd}
+      - {key: landed, label: Landed cost, format: usd}
+      - {key: overhead, label: Overhead, format: pct}
+    sql: |
+      SELECT x.partner_name AS partner, x.country, x.goods_category AS goods, x.shipping_terms AS terms,
+             COUNT(*) AS shipments, SUM(x.customs_value_usd) AS customs, SUM(x.landed_cost_usd) AS landed,
+             SUM(x.freight_usd + x.duty_and_tax_usd) / NULLIF(SUM(x.customs_value_usd), 0) AS overhead
+      FROM gold.fact_imports x WHERE {where} GROUP BY 1, 2, 3, 4 ORDER BY landed DESC

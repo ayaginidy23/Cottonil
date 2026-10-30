@@ -1,0 +1,88 @@
+id: store_expansion
+title: New Store Expansion & Site Selection
+group: Branches
+order: 22
+icon: map-pin
+description: Where is demand not well served by the branch network? Registered customers and online orders per governorate vs the number of branches. All customers and online orders are in the 21 governorates that already have a branch, so the question is where to add a second branch. (Reported opening dates are unreliable, so new-vs-mature store analysis is not used.)
+
+columns:
+  date: f.order_date
+  branch: f.branch_id
+  channel: f.sales_channel
+
+kpis:
+  - id: covered_govs
+    label: Governorates with a branch
+    format: number
+    compare: false
+    columns: {}
+    sql: |
+      SELECT COUNT(DISTINCT governorate_ar) AS value FROM gold.dim_branch
+  - id: customers_per_branch
+    label: Registered customers per branch
+    format: number
+    compare: false
+    columns: {}
+    sql: |
+      SELECT (SELECT COUNT(*) FROM gold.dim_customer WHERE NOT is_guest)::NUMERIC
+             / NULLIF((SELECT COUNT(*) FROM gold.dim_branch), 0) AS value
+
+charts:
+  - id: opportunity_table
+    title: Demand vs network by governorate (expansion candidates first)
+    type: table
+    width: full
+    table_columns:
+      - {key: governorate, label: Governorate}
+      - {key: branches, label: Branches, format: number}
+      - {key: customers, label: Registered customers, format: number}
+      - {key: customers_per_branch, label: Customers / branch, format: number}
+      - {key: online_orders, label: Online orders, format: number}
+      - {key: online_sales, label: Online sales, format: egp}
+      - {key: branch_sales, label: Branch sales, format: egp}
+      - {key: signal, label: Signal}
+    sql: |
+      WITH g AS (
+          SELECT governorate_ar AS gov FROM gold.dim_branch
+          UNION SELECT governorate_ar FROM gold.dim_customer WHERE governorate_ar IS NOT NULL
+          UNION SELECT ship_to_governorate FROM gold.fact_orders WHERE ship_to_governorate IS NOT NULL
+      ),
+      b AS (SELECT governorate_ar AS gov, COUNT(*) AS branches FROM gold.dim_branch GROUP BY 1),
+      c AS (SELECT governorate_ar AS gov, COUNT(*) AS customers FROM gold.dim_customer WHERE NOT is_guest GROUP BY 1),
+      o AS (SELECT f.ship_to_governorate AS gov, COUNT(*) AS online_orders, SUM(f.net_sales_after_returns_egp) AS online_sales
+            FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL GROUP BY 1),
+      s AS (SELECT db.governorate_ar AS gov, SUM(f.net_sales_after_returns_egp) AS branch_sales
+            FROM gold.fact_orders f JOIN gold.dim_branch db ON db.branch_id = f.branch_id
+            WHERE {where} GROUP BY 1)
+      SELECT g.gov AS governorate,
+             COALESCE(b.branches, 0) AS branches,
+             COALESCE(c.customers, 0) AS customers,
+             COALESCE(c.customers, 0)::NUMERIC / NULLIF(b.branches, 0) AS customers_per_branch,
+             COALESCE(o.online_orders, 0) AS online_orders,
+             COALESCE(o.online_sales, 0) AS online_sales,
+             COALESCE(s.branch_sales, 0) AS branch_sales,
+             CASE WHEN COALESCE(b.branches, 0) = 0 THEN 'No branch - candidate'
+                  WHEN COALESCE(c.customers, 0)::NUMERIC / b.branches
+                       > 1.5 * (SELECT COUNT(*) FROM gold.dim_customer WHERE NOT is_guest)::NUMERIC
+                             / (SELECT COUNT(*) FROM gold.dim_branch) THEN 'Under-served'
+                  ELSE 'Covered' END AS signal
+      FROM g
+      LEFT JOIN b ON b.gov = g.gov LEFT JOIN c ON c.gov = g.gov
+      LEFT JOIN o ON o.gov = g.gov LEFT JOIN s ON s.gov = g.gov
+      ORDER BY (COALESCE(b.branches, 0) = 0) DESC, customers_per_branch DESC NULLS FIRST
+
+  - id: customers_per_branch
+    title: Registered customers per branch by governorate
+    type: hbar
+    width: full
+    format: number
+    x: label
+    series: [{key: value, label: Customers per branch}]
+    columns: {}
+    sql: |
+      SELECT c.governorate_ar AS label, COUNT(*)::NUMERIC / NULLIF(MAX(b.n), 0) AS value
+      FROM gold.dim_customer c
+      JOIN (SELECT governorate_ar, COUNT(*) AS n FROM gold.dim_branch GROUP BY 1) b
+        ON b.governorate_ar = c.governorate_ar
+      WHERE NOT c.is_guest
+      GROUP BY 1 ORDER BY 2 DESC

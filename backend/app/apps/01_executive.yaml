@@ -1,0 +1,164 @@
+# =============================================================================
+# App definition: Executive Dashboard
+# -----------------------------------------------------------------------------
+# How an app file works:
+#   columns:  which column each global filter applies to (default for all queries;
+#             a KPI or chart can override it with its own "columns:")
+#   kpis:     each SQL must return ONE row with ONE column named "value"
+#   charts:   each SQL returns the rows to draw; "x" and "series" say which columns
+#   {where}:  replaced by the filter condition (date range, branches, channels)
+#   format:   egp | number | pct | days | decimal
+#   good:     up (higher is better, default) | down (lower is better)
+#   width:    full | half | third
+#   chart types: line | area | bar | hbar | donut | table
+# =============================================================================
+id: executive
+title: Executive Dashboard
+group: Overview
+order: 1
+icon: layout-dashboard
+description: One view of sales, profit, customers and returns across all branches and channels.
+
+columns:
+  date: f.order_date
+  branch: f.branch_id
+  channel: f.sales_channel
+
+kpis:
+  - id: net_sales
+    label: Net sales
+    format: egp
+    hint: Before VAT, after returns
+    sql: |
+      SELECT SUM(f.net_sales_after_returns_egp) AS value
+      FROM gold.fact_orders f WHERE {where}
+
+  - id: real_net_sales
+    label: Real net sales
+    format: egp
+    hint: Inflation-adjusted to 2026 prices
+    sql: |
+      SELECT SUM(f.real_net_sales_egp) AS value
+      FROM gold.fact_orders f WHERE {where}
+
+  - id: gross_margin_pct
+    label: Gross margin
+    format: pct
+    sql: |
+      SELECT SUM(f.margin_after_returns_egp) / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_orders f WHERE {where}
+
+  - id: operating_profit
+    label: Operating profit
+    format: egp
+    hint: Margin - opex - payroll - transfer cost
+    columns: {month: p.month_start, branch: p.branch_id}
+    sql: |
+      SELECT SUM(p.operating_profit_egp) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+
+  - id: orders
+    label: Orders
+    format: number
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_orders f WHERE {where}
+
+  - id: aov
+    label: Avg order value
+    format: egp
+    sql: |
+      SELECT AVG(f.net_sales_egp) AS value FROM gold.fact_orders f WHERE {where}
+
+  - id: active_customers
+    label: Active customers
+    format: number
+    hint: Registered customers who ordered
+    sql: |
+      SELECT COUNT(DISTINCT f.customer_key) AS value
+      FROM gold.fact_orders f WHERE {where} AND f.customer_key <> 'GUEST'
+
+  - id: return_rate
+    label: Orders with a return
+    format: pct
+    good: down
+    sql: |
+      SELECT AVG(CASE WHEN f.has_return THEN 1.0 ELSE 0 END) AS value
+      FROM gold.fact_orders f WHERE {where}
+
+charts:
+  - id: monthly_trend
+    title: Monthly net sales - nominal vs real (2026 prices)
+    type: line
+    width: full
+    format: egp
+    x: month
+    series:
+      - {key: net_sales, label: Net sales (nominal)}
+      - {key: real_net_sales, label: Real net sales (2026 prices)}
+      - {key: gross_margin, label: Gross margin}
+    columns: {date: m.order_date, branch: m.branch_id, channel: m.sales_channel}
+    sql: |
+      SELECT m.month_start AS month,
+             SUM(m.net_sales_after_returns_egp) AS net_sales,
+             SUM(m.real_net_sales_egp)          AS real_net_sales,
+             SUM(m.margin_after_returns_egp)    AS gross_margin
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: sales_by_channel
+    title: Net sales by channel
+    type: donut
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Net sales}]
+    sql: |
+      SELECT f.sales_channel AS label, SUM(f.net_sales_after_returns_egp) AS value
+      FROM gold.fact_orders f WHERE {where}
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: sales_by_category
+    title: Net sales by product category
+    type: hbar
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Net sales}]
+    columns: {date: s.order_date, branch: s.branch_id, channel: s.sales_channel}
+    sql: |
+      SELECT p.category AS label, SUM(s.net_sales_after_returns_egp) AS value
+      FROM gold.fact_sales_line s
+      JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where}
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: top_branches_profit
+    title: Top 10 branches by operating profit
+    type: hbar
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Operating profit}]
+    columns: {month: p.month_start, branch: p.branch_id}
+    sql: |
+      SELECT b.branch_display_name AS label, SUM(p.operating_profit_egp) AS value
+      FROM gold.mart_branch_pnl_monthly p
+      JOIN gold.dim_branch b ON b.branch_id = p.branch_id
+      WHERE {where}
+      GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+
+  - id: sales_by_governorate
+    title: Net sales by governorate
+    type: bar
+    width: full
+    format: egp
+    x: label
+    series: [{key: value, label: Net sales}]
+    sql: |
+      SELECT b.governorate_ar AS label, SUM(f.net_sales_after_returns_egp) AS value
+      FROM gold.fact_orders f
+      JOIN gold.dim_branch b ON b.branch_id = f.branch_id
+      WHERE {where}
+      GROUP BY 1 ORDER BY 2 DESC

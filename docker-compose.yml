@@ -1,0 +1,24 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: cottonil_db
+    env_file: .env
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: cottonil_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5055:80"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

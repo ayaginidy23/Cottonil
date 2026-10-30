@@ -1,0 +1,168 @@
+id: forecasting
+title: Demand Forecasting & Product Planning
+group: Products
+order: 43
+icon: chart-spline
+description: Demand history, trend and seasonality, plus the ML forecast of units for the next 6 months per category (Holt-Winters or seasonal baseline, whichever was more accurate in the backtest). Forecast items ignore the filters.
+
+insights:
+  - "Backtest on the last 6 known months: the total-units forecast was off by only 3.7% on average (MAPE), half the error of the seasonal baseline 'same month last year' (7.5%)."
+  - "Per category the average error is 7.3% vs 11.0% for the baseline; Holt-Winters beat the baseline in all 16 categories and the total, so it is used everywhere."
+  - "Forecasts are in units, not EGP, because prices rose about 7x since 2018 - EGP history would mix inflation with real demand."
+
+columns:
+  date: m.order_date
+  branch: m.branch_id
+  channel: m.sales_channel
+
+kpis:
+  - id: forecast_6m
+    label: Forecast - next 6 months (units)
+    format: number
+    compare: false
+    columns: {}
+    sql: |
+      SELECT SUM(forecast_units) AS value FROM gold.ml_forecast_monthly
+      WHERE is_forecast AND category = 'TOTAL'
+  - id: forecast_growth
+    label: Forecast vs same months last year
+    format: pct
+    compare: false
+    columns: {}
+    sql: |
+      SELECT SUM(f.forecast_units) / NULLIF(SUM(a.actual_units), 0) - 1 AS value
+      FROM gold.ml_forecast_monthly f
+      JOIN gold.ml_forecast_monthly a
+        ON a.category = f.category AND a.month_start = (f.month_start - INTERVAL '1 year')::date
+      WHERE f.is_forecast AND f.category = 'TOTAL'
+  - id: forecast_mape
+    label: Forecast error (backtest MAPE)
+    format: pct
+    good: down
+    compare: false
+    columns: {}
+    hint: Avg % error per category on the last 6 known months
+    sql: |
+      SELECT value FROM gold.ml_model_metrics
+      WHERE model = 'demand_forecast' AND metric = 'mape_category_selected'
+  - id: avg_monthly_units
+    label: Avg units per month
+    format: number
+    sql: |
+      SELECT SUM(m.net_units)::NUMERIC / NULLIF(COUNT(DISTINCT m.month_start), 0) AS value
+      FROM gold.mart_sales_daily m JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+  - id: peak_month
+    label: Peak month (avg units)
+    format: text
+    compare: false
+    sql: |
+      SELECT d.month_name AS value
+      FROM gold.mart_sales_daily m JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY d.month, d.month_name
+      ORDER BY SUM(m.net_units)::NUMERIC / COUNT(DISTINCT m.month_start) DESC LIMIT 1
+  - id: seasonality_swing
+    label: Seasonality swing
+    format: decimal
+    hint: Best month / weakest month (avg units)
+    compare: false
+    sql: |
+      SELECT MAX(u) / NULLIF(MIN(u), 0) AS value FROM (
+          SELECT d.month, SUM(m.net_units)::NUMERIC / COUNT(DISTINCT m.month_start) AS u
+          FROM gold.mart_sales_daily m JOIN gold.dim_date d ON d.date_key = m.order_date
+          WHERE {where} AND d.is_complete_month GROUP BY d.month
+      ) x
+
+charts:
+  - id: ml_forecast_total
+    title: Total units - last 24 months and 6-month forecast (80% interval)
+    type: line
+    width: full
+    format: number
+    x: month
+    columns: {}
+    series:
+      - {key: actual, label: Actual units}
+      - {key: forecast, label: Forecast}
+      - {key: lower_80, label: Lower 80%}
+      - {key: upper_80, label: Upper 80%}
+    sql: |
+      SELECT month_start AS month, actual_units AS actual,
+             forecast_units AS forecast, lower_80, upper_80
+      FROM gold.ml_forecast_monthly
+      WHERE category = 'TOTAL'
+        AND month_start > (SELECT MAX(month_start) FROM gold.ml_forecast_monthly WHERE NOT is_forecast)
+                          - INTERVAL '24 months'
+      ORDER BY 1
+
+  - id: ml_forecast_categories
+    title: Forecast by category - next 6 months vs the same months last year
+    type: table
+    width: full
+    columns: {}
+    table_columns:
+      - {key: category, label: Category}
+      - {key: method, label: Method}
+      - {key: forecast_units, label: Forecast units (6m), format: number}
+      - {key: last_year_units, label: Same months last year, format: number}
+      - {key: growth, label: Expected growth, format: pct}
+    sql: |
+      SELECT f.category, MAX(f.method) AS method,
+             SUM(f.forecast_units) AS forecast_units, SUM(a.actual_units) AS last_year_units,
+             SUM(f.forecast_units) / NULLIF(SUM(a.actual_units), 0) - 1 AS growth
+      FROM gold.ml_forecast_monthly f
+      LEFT JOIN gold.ml_forecast_monthly a
+        ON a.category = f.category AND a.month_start = (f.month_start - INTERVAL '1 year')::date
+      WHERE f.is_forecast AND f.category <> 'TOTAL'
+      GROUP BY f.category ORDER BY growth DESC NULLS LAST
+
+  - id: seasonality
+    title: Seasonality index by month (1.0 = average month)
+    type: bar
+    width: half
+    format: decimal
+    x: label
+    series: [{key: value, label: Seasonality index}]
+    sql: |
+      WITH mm AS (
+          SELECT d.month, d.month_name, SUM(m.net_units)::NUMERIC / COUNT(DISTINCT m.month_start) AS u
+          FROM gold.mart_sales_daily m JOIN gold.dim_date d ON d.date_key = m.order_date
+          WHERE {where} AND d.is_complete_month GROUP BY d.month, d.month_name
+      )
+      SELECT month_name AS label, u / NULLIF(AVG(u) OVER (), 0) AS value FROM mm ORDER BY month
+
+  - id: units_by_year
+    title: Units sold by year (complete months)
+    type: bar
+    width: half
+    format: number
+    x: year
+    series: [{key: units, label: Net units}]
+    sql: |
+      SELECT d.year::TEXT AS year, SUM(m.net_units) AS units
+      FROM gold.mart_sales_daily m JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month GROUP BY 1 ORDER BY 1
+
+  - id: category_growth
+    title: Category demand - latest 12 complete months vs the 12 before (ignores the date filter)
+    type: table
+    width: full
+    columns: {branch: s.branch_id, channel: s.sales_channel}
+    table_columns:
+      - {key: category, label: Category}
+      - {key: last_12m, label: Units last 12m, format: number}
+      - {key: prev_12m, label: Units previous 12m, format: number}
+      - {key: growth, label: Growth, format: pct}
+    sql: |
+      WITH lim AS (SELECT MAX(s.month_start) AS m FROM gold.fact_sales_line s
+                   JOIN gold.dim_date d ON d.date_key = s.month_start
+                   WHERE {where} AND d.is_complete_month)
+      SELECT p.category,
+             SUM(s.quantity - s.returned_units) FILTER (WHERE s.month_start >  lim.m - INTERVAL '12 months') AS last_12m,
+             SUM(s.quantity - s.returned_units) FILTER (WHERE s.month_start <= lim.m - INTERVAL '12 months') AS prev_12m,
+             SUM(s.quantity - s.returned_units) FILTER (WHERE s.month_start >  lim.m - INTERVAL '12 months')::NUMERIC
+               / NULLIF(SUM(s.quantity - s.returned_units) FILTER (WHERE s.month_start <= lim.m - INTERVAL '12 months'), 0) - 1 AS growth
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id CROSS JOIN lim
+      WHERE {where} AND s.month_start > lim.m - INTERVAL '24 months' AND s.month_start <= lim.m
+      GROUP BY p.category ORDER BY growth DESC NULLS LAST

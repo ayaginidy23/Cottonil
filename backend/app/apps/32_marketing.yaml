@@ -1,0 +1,88 @@
+id: marketing
+title: Marketing ROI & Campaigns
+group: Customers & Marketing
+order: 32
+icon: megaphone
+description: Spend, reach, clicks, conversion and cost per order by channel. Revenue per campaign is estimated as attributed orders x the average order value of that month (the data has no direct campaign revenue).
+
+columns:
+  date: m.start_date
+
+kpis:
+  - id: spend
+    label: Marketing spend
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(m.spend_egp) AS value FROM gold.fact_marketing m WHERE {where}
+  - id: campaigns
+    label: Campaigns
+    format: number
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_marketing m WHERE {where}
+  - id: ctr
+    label: Click-through rate
+    format: pct
+    sql: |
+      SELECT SUM(m.clicks)::NUMERIC / NULLIF(SUM(m.impressions), 0) AS value
+      FROM gold.fact_marketing m WHERE {where}
+  - id: conversion
+    label: Click -> order conversion
+    format: pct
+    sql: |
+      SELECT SUM(m.orders_attributed)::NUMERIC / NULLIF(SUM(m.clicks), 0) AS value
+      FROM gold.fact_marketing m WHERE {where}
+  - id: cpo
+    label: Cost per attributed order
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(m.spend_egp) / NULLIF(SUM(m.orders_attributed), 0) AS value
+      FROM gold.fact_marketing m WHERE {where}
+  - id: roas
+    label: Estimated ROAS
+    format: decimal
+    hint: Estimated revenue / spend
+    sql: |
+      WITH aov AS (SELECT month_start, AVG(net_sales_after_returns_egp) AS aov
+                   FROM gold.fact_orders GROUP BY month_start)
+      SELECT SUM(m.orders_attributed * a.aov) / NULLIF(SUM(m.spend_egp), 0) AS value
+      FROM gold.fact_marketing m LEFT JOIN aov a ON a.month_start = m.month_start
+      WHERE {where}
+
+charts:
+  - id: channel_table
+    title: Channel performance
+    type: table
+    width: full
+    table_columns:
+      - {key: channel, label: Channel}
+      - {key: campaigns, label: Campaigns, format: number}
+      - {key: spend, label: Spend, format: egp}
+      - {key: impressions, label: Impressions, format: number}
+      - {key: ctr, label: CTR, format: pct}
+      - {key: conversion, label: Conversion, format: pct}
+      - {key: cpo, label: Cost / order, format: egp}
+      - {key: roas, label: Est. ROAS, format: decimal}
+    sql: |
+      WITH aov AS (SELECT month_start, AVG(net_sales_after_returns_egp) AS aov
+                   FROM gold.fact_orders GROUP BY month_start)
+      SELECT m.channel, COUNT(*) AS campaigns, SUM(m.spend_egp) AS spend, SUM(m.impressions) AS impressions,
+             SUM(m.clicks)::NUMERIC / NULLIF(SUM(m.impressions), 0) AS ctr,
+             SUM(m.orders_attributed)::NUMERIC / NULLIF(SUM(m.clicks), 0) AS conversion,
+             SUM(m.spend_egp) / NULLIF(SUM(m.orders_attributed), 0) AS cpo,
+             SUM(m.orders_attributed * a.aov) / NULLIF(SUM(m.spend_egp), 0) AS roas
+      FROM gold.fact_marketing m LEFT JOIN aov a ON a.month_start = m.month_start
+      WHERE {where} GROUP BY 1 ORDER BY roas DESC NULLS LAST
+
+  - id: monthly_spend
+    title: Monthly marketing spend
+    type: area
+    width: full
+    format: egp
+    x: month
+    series: [{key: spend, label: Spend}]
+    sql: |
+      SELECT m.month_start AS month, SUM(m.spend_egp) AS spend
+      FROM gold.fact_marketing m JOIN gold.dim_date d ON d.date_key = m.month_start
+      WHERE {where} AND d.is_complete_month GROUP BY 1 ORDER BY 1

@@ -1,0 +1,211 @@
+id: customers
+title: Customers - Segments, Value & Churn
+group: Customers & Marketing
+order: 30
+icon: users
+description: Who the customers are (RFM segments), how loyal they are, what they are worth, who stopped buying and who to win back. The first KPIs follow the filters; segments, lifetime value and inactivity are calculated on all history up to the last data date. Rule-based (no ML).
+
+columns:
+  date: f.order_date
+  branch: f.branch_id
+  channel: f.sales_channel
+
+kpis:
+  - id: active_customers
+    label: Active customers
+    format: number
+    sql: |
+      SELECT COUNT(DISTINCT f.customer_key) AS value FROM gold.fact_orders f
+      WHERE {where} AND f.customer_key <> 'GUEST'
+  - id: repeat_rate
+    label: Repeat customers
+    format: pct
+    hint: Customers with 2+ orders in the period
+    sql: |
+      SELECT AVG(CASE WHEN n >= 2 THEN 1.0 ELSE 0 END) AS value FROM (
+          SELECT f.customer_key, COUNT(*) AS n FROM gold.fact_orders f
+          WHERE {where} AND f.customer_key <> 'GUEST' GROUP BY 1
+      ) x
+  - id: registered_sales_share
+    label: Sales from registered customers
+    format: pct
+    sql: |
+      SELECT SUM(f.net_sales_after_returns_egp) FILTER (WHERE NOT f.is_guest)
+             / NULLIF(SUM(f.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_orders f WHERE {where}
+  - id: champions
+    label: Champions + Loyal customers
+    format: number
+    compare: false
+    columns: {}
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.mart_customer_rfm r
+      WHERE r.rfm_segment IN ('Champions', 'Loyal')
+  - id: inactive_rate
+    label: Inactive 12+ months
+    format: pct
+    good: down
+    compare: false
+    columns: {}
+    hint: No order in the last 365 days (customers buy every ~260 days on average)
+    sql: |
+      SELECT AVG(CASE WHEN r.recency_days > 365 THEN 1.0 ELSE 0 END) AS value
+      FROM gold.mart_customer_rfm r WHERE r.orders > 0
+  - id: avg_clv
+    columns: {}
+    label: Avg customer lifetime value
+    format: egp
+    compare: false
+    sql: |
+      SELECT AVG(r.monetary_egp) AS value FROM gold.mart_customer_rfm r WHERE r.orders > 0
+  - id: at_risk
+    columns: {}
+    label: At-risk customers
+    format: number
+    good: down
+    compare: false
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.mart_customer_rfm r WHERE r.rfm_segment = 'At risk'
+  - id: revenue_at_risk
+    columns: {}
+    label: Lifetime revenue of at-risk customers
+    format: egp
+    compare: false
+    sql: |
+      SELECT SUM(r.monetary_egp) AS value FROM gold.mart_customer_rfm r WHERE r.rfm_segment = 'At risk'
+  - id: purchase_interval
+    columns: {}
+    label: Avg days between orders
+    format: days
+    compare: false
+    sql: |
+      SELECT AVG(r.active_span_days::NUMERIC / (r.orders - 1)) AS value
+      FROM gold.mart_customer_rfm r WHERE r.orders > 1
+
+charts:
+  - id: segments
+    title: Customers by RFM segment
+    type: donut
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Customers}]
+    columns: {}
+    sql: |
+      SELECT r.rfm_segment AS label, COUNT(*) AS value
+      FROM gold.mart_customer_rfm r GROUP BY 1 ORDER BY 2 DESC
+
+  - id: value_concentration
+    columns: {}
+    title: Share of revenue by customer value group
+    type: donut
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Lifetime revenue}]
+    sql: |
+      WITH q AS (
+          SELECT r.monetary_egp, NTILE(10) OVER (ORDER BY r.monetary_egp DESC) AS decile
+          FROM gold.mart_customer_rfm r WHERE r.orders > 0
+      )
+      SELECT CASE WHEN decile = 1 THEN 'Top 10% customers'
+                  WHEN decile <= 3 THEN 'Next 20%'
+                  WHEN decile <= 6 THEN 'Middle 30%'
+                  ELSE 'Bottom 40%' END AS label,
+             SUM(monetary_egp) AS value
+      FROM q GROUP BY 1 ORDER BY 2 DESC
+
+  - id: segment_table
+    title: What each segment is worth
+    type: table
+    width: full
+    columns: {}
+    table_columns:
+      - {key: segment, label: Segment}
+      - {key: customers, label: Customers, format: number}
+      - {key: revenue_share, label: Share of revenue, format: pct}
+      - {key: avg_orders, label: Avg orders, format: decimal}
+      - {key: avg_value, label: Avg lifetime value, format: egp}
+      - {key: avg_recency, label: Days since last order, format: number}
+    sql: |
+      SELECT r.rfm_segment AS segment, COUNT(*) AS customers,
+             SUM(r.monetary_egp) / NULLIF(SUM(SUM(r.monetary_egp)) OVER (), 0) AS revenue_share,
+             AVG(r.orders) AS avg_orders, AVG(r.monetary_egp) AS avg_value, AVG(r.recency_days) AS avg_recency
+      FROM gold.mart_customer_rfm r GROUP BY 1 ORDER BY revenue_share DESC
+
+  - id: recency
+    columns: {}
+    title: Customers by days since last order
+    type: bar
+    width: half
+    format: number
+    x: bucket
+    series: [{key: customers, label: Customers}]
+    sql: |
+      SELECT CASE WHEN r.recency_days <= 30  THEN '1. 0-30'
+                  WHEN r.recency_days <= 90  THEN '2. 31-90'
+                  WHEN r.recency_days <= 180 THEN '3. 91-180'
+                  WHEN r.recency_days <= 365 THEN '4. 181-365'
+                  ELSE '5. 365+' END AS bucket,
+             COUNT(*) AS customers
+      FROM gold.mart_customer_rfm r WHERE r.orders > 0
+      GROUP BY 1 ORDER BY 1
+
+  - id: repeat_by_cohort
+    title: Bought again within 12 months - by year of first order
+    type: bar
+    width: half
+    format: pct
+    x: year
+    series: [{key: value, label: Repeat within 12 months}]
+    columns: {}
+    sql: |
+      WITH second AS (
+          SELECT o.customer_key, MIN(o.order_date) AS second_order_date
+          FROM gold.fact_orders o
+          JOIN gold.mart_customer_rfm r ON r.customer_key = o.customer_key
+          WHERE o.order_date > r.first_order_date
+          GROUP BY o.customer_key
+      )
+      SELECT EXTRACT(YEAR FROM r.first_order_date)::INT::TEXT AS year,
+             AVG(CASE WHEN s.second_order_date <= r.first_order_date + 365 THEN 1.0 ELSE 0 END) AS value
+      FROM gold.mart_customer_rfm r
+      LEFT JOIN second s ON s.customer_key = r.customer_key
+      WHERE r.first_order_date IS NOT NULL
+        AND r.first_order_date <= (SELECT MAX(order_date) FROM gold.fact_orders) - 365
+      GROUP BY 1 ORDER BY 1
+
+  - id: new_per_month
+    title: New customers per month (first order)
+    type: area
+    width: full
+    format: number
+    x: month
+    series: [{key: value, label: New customers}]
+    columns: {date: r.first_order_date}
+    sql: |
+      SELECT date_trunc('month', r.first_order_date)::DATE AS month, COUNT(*) AS value
+      FROM gold.mart_customer_rfm r
+      JOIN gold.dim_date d ON d.date_key = r.first_order_date
+      WHERE {where} AND r.first_order_date IS NOT NULL
+        AND date_trunc('month', r.first_order_date) IN (SELECT month_start FROM gold.dim_date WHERE is_complete_month)
+      GROUP BY 1 ORDER BY 1
+
+  - id: winback
+    columns: {}
+    title: Win-back list - most valuable at-risk customers
+    type: table
+    width: full
+    table_columns:
+      - {key: customer, label: Customer id}
+      - {key: governorate, label: Governorate}
+      - {key: orders, label: Orders, format: number}
+      - {key: lifetime_value, label: Lifetime value, format: egp}
+      - {key: last_order, label: Last order}
+      - {key: recency_days, label: Days since last order, format: number}
+    sql: |
+      SELECT r.customer_key AS customer, r.governorate_ar AS governorate, r.orders,
+             r.monetary_egp AS lifetime_value, r.last_order_date::TEXT AS last_order, r.recency_days
+      FROM gold.mart_customer_rfm r
+      WHERE r.rfm_segment = 'At risk'
+      ORDER BY r.monetary_egp DESC LIMIT 25

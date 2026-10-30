@@ -1,0 +1,293 @@
+id: inventory_supply
+title: Inventory, Replenishment & Transfers
+group: Inventory & Supply Chain
+order: 50
+icon: warehouse
+description: Stock levels and value in branches and warehouses, which branch needs stock now and which has too much (months of cover), and the warehouse-to-branch transfers. Stock is a month-end snapshot, so stock KPIs use the latest month in the selected period.
+
+# Stock has no sales channel; "branch" filters the stock location.
+# Transfer items override the columns (transfer date / destination branch).
+columns:
+  month: i.month_start
+  branch: i.location_id
+
+kpis:
+  - id: stock_units
+    label: Units in stock (latest month)
+    format: number
+    sql: |
+      SELECT SUM(i.closing_units) AS value FROM gold.fact_inventory_monthly i
+      WHERE {where} AND i.month_start = (SELECT MAX(i.month_start) FROM gold.fact_inventory_monthly i WHERE {where})
+  - id: stock_value
+    label: Stock value (latest month)
+    format: egp
+    sql: |
+      SELECT SUM(i.closing_stock_value_egp) AS value FROM gold.fact_inventory_monthly i
+      WHERE {where} AND i.month_start = (SELECT MAX(i.month_start) FROM gold.fact_inventory_monthly i WHERE {where})
+  - id: warehouse_share
+    label: Stock held in warehouses
+    format: pct
+    sql: |
+      SELECT SUM(i.closing_units) FILTER (WHERE i.location_type = 'Warehouse')::NUMERIC
+             / NULLIF(SUM(i.closing_units), 0) AS value
+      FROM gold.fact_inventory_monthly i
+      WHERE {where} AND i.month_start = (SELECT MAX(i.month_start) FROM gold.fact_inventory_monthly i WHERE {where})
+  - id: months_cover
+    label: Months of cover (branches)
+    format: decimal
+    hint: Branch stock / avg monthly units sold (last 3 months)
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT SUM(i.closing_units) AS u FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch'),
+      sold AS (SELECT SUM(s.quantity - s.returned_units) / 3.0 AS u
+               FROM gold.fact_sales_line s, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+                 AND s.branch_id IN (SELECT i.location_id FROM gold.fact_inventory_monthly i, last
+                                     WHERE {where} AND i.month_start = last.m))
+      SELECT stock.u / NULLIF(sold.u, 0) AS value FROM stock, sold
+  - id: replenish_now
+    label: Branch-categories to replenish
+    format: number
+    good: down
+    hint: Less than 1 month of cover
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT i.location_id, i.category, i.closing_units FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch'),
+      sold AS (SELECT s.branch_id, p.category, SUM(s.quantity - s.returned_units) / 3.0 AS avg_monthly
+               FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+               GROUP BY 1, 2)
+      SELECT COUNT(*) AS value FROM stock
+      JOIN sold ON sold.branch_id = stock.location_id AND sold.category = stock.category
+      WHERE stock.closing_units / NULLIF(sold.avg_monthly, 0) < 1
+  - id: overstock
+    label: Branch-categories overstocked
+    format: number
+    good: down
+    hint: More than 6 months of cover
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT i.location_id, i.category, i.closing_units FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch'),
+      sold AS (SELECT s.branch_id, p.category, SUM(s.quantity - s.returned_units) / 3.0 AS avg_monthly
+               FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+               GROUP BY 1, 2)
+      SELECT COUNT(*) AS value FROM stock
+      LEFT JOIN sold ON sold.branch_id = stock.location_id AND sold.category = stock.category
+      WHERE stock.closing_units > 0
+        AND (sold.avg_monthly IS NULL OR stock.closing_units / NULLIF(sold.avg_monthly, 0) > 6)
+  - id: transfers
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    label: Transfers
+    format: number
+    sql: |
+      SELECT COUNT(DISTINCT t.transfer_id) AS value FROM gold.fact_transfers t WHERE {where}
+  - id: units
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    label: Units moved
+    format: number
+    sql: |
+      SELECT SUM(t.quantity_units) AS value FROM gold.fact_transfers t WHERE {where}
+  - id: transport_cost
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    label: Transport cost
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(t.transport_cost_allocated_egp) AS value FROM gold.fact_transfers t WHERE {where}
+  - id: cost_per_unit
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    label: Cost per unit moved
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(t.transport_cost_allocated_egp) / NULLIF(SUM(t.quantity_units), 0) AS value
+      FROM gold.fact_transfers t WHERE {where}
+  - id: completed
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    label: Transfers completed
+    format: pct
+    sql: |
+      SELECT COUNT(DISTINCT t.transfer_id) FILTER (WHERE t.transfer_status = 'Completed')::NUMERIC
+             / NULLIF(COUNT(DISTINCT t.transfer_id), 0) AS value
+      FROM gold.fact_transfers t WHERE {where}
+
+charts:
+  - id: value_trend
+    title: Month-end stock value - nominal vs real (2026 prices)
+    type: line
+    width: full
+    format: egp
+    x: month
+    series:
+      - {key: nominal, label: Stock value (nominal)}
+      - {key: real, label: Stock value (2026 prices)}
+    sql: |
+      SELECT i.month_start AS month, SUM(i.closing_stock_value_egp) AS nominal,
+             SUM(i.real_closing_stock_value_egp) AS real
+      FROM gold.fact_inventory_monthly i WHERE {where} GROUP BY 1 ORDER BY 1
+
+  - id: by_category
+    title: Units in stock by category (latest month)
+    type: hbar
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Units}]
+    sql: |
+      SELECT i.category AS label, SUM(i.closing_units) AS value FROM gold.fact_inventory_monthly i
+      WHERE {where} AND i.month_start = (SELECT MAX(i.month_start) FROM gold.fact_inventory_monthly i WHERE {where})
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: cover_by_category
+    title: Months of cover by category (branches, latest month)
+    type: hbar
+    width: half
+    format: decimal
+    x: label
+    series: [{key: value, label: Months of cover}]
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT i.category, SUM(i.closing_units) AS u FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch' GROUP BY 1),
+      sold AS (SELECT p.category, SUM(s.quantity - s.returned_units) / 3.0 AS u
+               FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+                 AND s.branch_id IN (SELECT i.location_id FROM gold.fact_inventory_monthly i, last
+                                     WHERE {where} AND i.month_start = last.m)
+               GROUP BY 1)
+      SELECT stock.category AS label, stock.u / NULLIF(sold.u, 0) AS value
+      FROM stock LEFT JOIN sold ON sold.category = stock.category ORDER BY value
+
+  - id: warehouse_table
+    title: Warehouses (latest month)
+    type: table
+    width: full
+    table_columns:
+      - {key: warehouse, label: Warehouse}
+      - {key: kind, label: Type}
+      - {key: governorate, label: Governorate}
+      - {key: units, label: Units, format: number}
+      - {key: capacity, label: Capacity, format: number}
+      - {key: utilization, label: Utilization, format: pct}
+      - {key: value, label: Stock value, format: egp}
+      - {key: risk, label: Avg risk, format: decimal}
+    sql: |
+      SELECT w.warehouse_label AS warehouse, w.warehouse_kind AS kind, w.governorate_ar AS governorate,
+             SUM(i.closing_units) AS units, MAX(w.capacity_units) AS capacity,
+             SUM(i.closing_units)::NUMERIC / NULLIF(MAX(w.capacity_units), 0) AS utilization,
+             SUM(i.closing_stock_value_egp) AS value, AVG(i.stockout_risk_score) AS risk
+      FROM gold.fact_inventory_monthly i JOIN gold.dim_warehouse w ON w.warehouse_id = i.location_id
+      WHERE {where} AND i.month_start = (SELECT MAX(i.month_start) FROM gold.fact_inventory_monthly i WHERE {where})
+      GROUP BY 1, 2, 3 ORDER BY units DESC
+
+  - id: action_split
+    title: Branch-category status (latest month)
+    type: donut
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Branch-categories}]
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT i.location_id, i.category, i.closing_units FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch'),
+      sold AS (SELECT s.branch_id, p.category, SUM(s.quantity - s.returned_units) / 3.0 AS avg_monthly
+               FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+               GROUP BY 1, 2),
+      st AS (
+          SELECT CASE WHEN sold.avg_monthly IS NULL OR sold.avg_monthly = 0 THEN 'No recent demand'
+                      WHEN stock.closing_units / sold.avg_monthly < 0.5 THEN 'Replenish now'
+                      WHEN stock.closing_units / sold.avg_monthly < 1   THEN 'Replenish soon'
+                      WHEN stock.closing_units / sold.avg_monthly > 6   THEN 'Overstock'
+                      ELSE 'OK' END AS action
+          FROM stock LEFT JOIN sold ON sold.branch_id = stock.location_id AND sold.category = stock.category
+      )
+      SELECT action AS label, COUNT(*) AS value FROM st GROUP BY 1 ORDER BY 2 DESC
+
+  - id: status
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    title: Transfer status
+    type: donut
+    width: half
+    format: number
+    x: label
+    series: [{key: value, label: Transfers}]
+    sql: |
+      SELECT t.transfer_status AS label, COUNT(DISTINCT t.transfer_id) AS value
+      FROM gold.fact_transfers t WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: action_list
+    title: Replenishment list - most urgent first
+    type: table
+    width: full
+    table_columns:
+      - {key: branch, label: Branch}
+      - {key: category, label: Category}
+      - {key: stock, label: Units in stock, format: number}
+      - {key: avg_monthly_sales, label: Avg monthly sales, format: decimal}
+      - {key: months_cover, label: Months of cover, format: decimal}
+      - {key: suggested_units, label: Units to send (to reach 2 months), format: number}
+      - {key: action, label: Action}
+    sql: |
+      WITH last AS (SELECT MAX(i.month_start) AS m FROM gold.fact_inventory_monthly i WHERE {where}),
+      stock AS (SELECT i.location_id, i.category, i.closing_units, i.stockout_risk_score
+                FROM gold.fact_inventory_monthly i, last
+                WHERE {where} AND i.month_start = last.m AND i.location_type = 'Branch'),
+      sold AS (SELECT s.branch_id, p.category, SUM(s.quantity - s.returned_units) / 3.0 AS avg_monthly
+               FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id, last
+               WHERE s.month_start > last.m - INTERVAL '3 months' AND s.month_start <= last.m
+               GROUP BY 1, 2)
+      SELECT b.branch_display_name AS branch, stock.category, stock.closing_units AS stock,
+             sold.avg_monthly AS avg_monthly_sales,
+             stock.closing_units / NULLIF(sold.avg_monthly, 0) AS months_cover,
+             stock.stockout_risk_score AS risk,
+             GREATEST(CEIL(2 * sold.avg_monthly - stock.closing_units), 0) AS suggested_units,
+             CASE WHEN stock.closing_units / NULLIF(sold.avg_monthly, 0) < 0.5 THEN 'Replenish now'
+                  WHEN stock.closing_units / NULLIF(sold.avg_monthly, 0) < 1   THEN 'Replenish soon'
+                  WHEN stock.closing_units / NULLIF(sold.avg_monthly, 0) > 6   THEN 'Overstock'
+                  ELSE 'OK' END AS action
+      FROM stock
+      JOIN sold ON sold.branch_id = stock.location_id AND sold.category = stock.category
+      JOIN gold.dim_branch b ON b.branch_id = stock.location_id
+      ORDER BY months_cover ASC NULLS LAST, risk DESC
+      LIMIT 60
+
+  - id: monthly_units
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    title: Units moved per month
+    type: area
+    width: full
+    format: number
+    x: month
+    series: [{key: units, label: Units moved}]
+    sql: |
+      SELECT t.month_start AS month, SUM(t.quantity_units) AS units
+      FROM gold.fact_transfers t JOIN gold.dim_date d ON d.date_key = t.month_start
+      WHERE {where} AND d.is_complete_month GROUP BY 1 ORDER BY 1
+
+  - id: flows
+    columns: {date: t.transfer_date, branch: t.destination_branch_id}
+    title: Main warehouse -> branch flows
+    type: table
+    width: full
+    table_columns:
+      - {key: warehouse, label: From warehouse}
+      - {key: branch, label: To branch}
+      - {key: transfers, label: Transfers, format: number}
+      - {key: units, label: Units, format: number}
+      - {key: cost, label: Transport cost, format: egp}
+      - {key: cost_per_unit, label: Cost / unit, format: egp}
+    sql: |
+      SELECT w.warehouse_label AS warehouse, b.branch_display_name AS branch,
+             COUNT(DISTINCT t.transfer_id) AS transfers, SUM(t.quantity_units) AS units,
+             SUM(t.transport_cost_allocated_egp) AS cost,
+             SUM(t.transport_cost_allocated_egp) / NULLIF(SUM(t.quantity_units), 0) AS cost_per_unit
+      FROM gold.fact_transfers t
+      JOIN gold.dim_warehouse w ON w.warehouse_id = t.source_warehouse_id
+      JOIN gold.dim_branch b ON b.branch_id = t.destination_branch_id
+      WHERE {where} GROUP BY 1, 2 ORDER BY units DESC LIMIT 30

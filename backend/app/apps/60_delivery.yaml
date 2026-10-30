@@ -1,0 +1,83 @@
+id: delivery
+title: Last-Mile Delivery Performance
+group: Operations
+order: 60
+icon: package-check
+description: E-commerce delivery speed, delays and shipping fees by carrier and governorate (only e-commerce orders are shipped).
+
+columns:
+  date: f.order_date
+  branch: f.branch_id
+  channel: f.sales_channel
+
+kpis:
+  - id: shipments
+    label: Shipments
+    format: number
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+  - id: avg_days
+    label: Avg delivery time
+    format: days
+    good: down
+    sql: |
+      SELECT AVG(f.delivery_days) AS value FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+  - id: delayed_rate
+    label: Delayed shipments
+    format: pct
+    good: down
+    sql: |
+      SELECT AVG(CASE WHEN f.fulfillment_status = 'Delayed' THEN 1.0 ELSE 0 END) AS value
+      FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+  - id: fast_share
+    label: Delivered within 2 days
+    format: pct
+    sql: |
+      SELECT AVG(CASE WHEN f.delivery_days <= 2 THEN 1.0 ELSE 0 END) AS value
+      FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+  - id: avg_fee
+    label: Avg shipping fee
+    format: egp
+    sql: |
+      SELECT AVG(f.shipping_fee_egp) AS value FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+  - id: fee_pct
+    label: Shipping fee / order value
+    format: pct
+    sql: |
+      SELECT SUM(f.shipping_fee_egp) / NULLIF(SUM(f.net_sales_egp), 0) AS value
+      FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+
+charts:
+
+  - id: days_distribution
+    title: Delivery time distribution
+    type: bar
+    width: full
+    format: number
+    x: bucket
+    series: [{key: shipments, label: Shipments}]
+    sql: |
+      SELECT CASE WHEN f.delivery_days >= 5 THEN '5+ days' ELSE f.delivery_days || ' days' END AS bucket,
+             COUNT(*) AS shipments
+      FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL
+      GROUP BY 1 ORDER BY MIN(f.delivery_days)
+
+  - id: carrier_table
+    title: Carrier scorecard
+    type: table
+    width: full
+    table_columns:
+      - {key: carrier, label: Carrier}
+      - {key: shipments, label: Shipments, format: number}
+      - {key: avg_days, label: Avg days, format: days}
+      - {key: delayed, label: Delayed, format: pct}
+      - {key: fast, label: Within 2 days, format: pct}
+      - {key: avg_fee, label: Avg fee, format: egp}
+      - {key: return_rate, label: Orders with return, format: pct}
+    sql: |
+      SELECT f.carrier, COUNT(*) AS shipments, AVG(f.delivery_days) AS avg_days,
+             AVG(CASE WHEN f.fulfillment_status = 'Delayed' THEN 1.0 ELSE 0 END) AS delayed,
+             AVG(CASE WHEN f.delivery_days <= 2 THEN 1.0 ELSE 0 END) AS fast,
+             AVG(f.shipping_fee_egp) AS avg_fee,
+             AVG(CASE WHEN f.has_return THEN 1.0 ELSE 0 END) AS return_rate
+      FROM gold.fact_orders f WHERE {where} AND f.shipment_id IS NOT NULL GROUP BY 1 ORDER BY shipments DESC

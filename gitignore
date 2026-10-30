@@ -1,0 +1,25 @@
+# Python virtual environment (large, rebuilt from requirements.txt)
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets / passwords (the template .env.example IS committed)
+.env
+
+# Data and reports - contain real numbers, never push them to GitHub
+data/
+reports/
+*.csv
+*.xlsx
+
+# Node / React
+node_modules/
+dist/
+
+# Archives and editor / OS files
+*.zip
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

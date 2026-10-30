@@ -1,0 +1,103 @@
+id: sales
+title: Sales Performance
+group: Sales
+order: 10
+icon: trending-up
+description: Revenue and units over time, real growth after inflation, retail events (Ramadan, Eid, back to school) and weekdays.
+
+columns:
+  date: m.order_date
+  branch: m.branch_id
+  channel: m.sales_channel
+
+kpis:
+  - id: net_sales
+    label: Net sales
+    format: egp
+    hint: Before VAT, after returns
+    sql: |
+      SELECT SUM(m.net_sales_after_returns_egp) AS value
+      FROM gold.mart_sales_daily m WHERE {where}
+
+  - id: net_units
+    label: Units sold (net)
+    format: number
+    sql: |
+      SELECT SUM(m.net_units) AS value FROM gold.mart_sales_daily m WHERE {where}
+
+  - id: avg_daily_sales
+    label: Avg daily sales
+    format: egp
+    sql: |
+      SELECT SUM(m.net_sales_after_returns_egp) / NULLIF(COUNT(DISTINCT m.order_date), 0) AS value
+      FROM gold.mart_sales_daily m WHERE {where}
+
+  - id: avg_unit_price
+    label: Avg selling price / unit
+    format: egp
+    sql: |
+      SELECT SUM(m.net_sales_egp) / NULLIF(SUM(m.units), 0) AS value
+      FROM gold.mart_sales_daily m WHERE {where}
+
+charts:
+  - id: yearly_nominal_vs_real
+    title: Yearly sales - nominal vs real (how much growth is inflation?)
+    type: bar
+    width: half
+    format: egp
+    x: year
+    series:
+      - {key: nominal, label: Nominal EGP}
+      - {key: real, label: Real (2026 prices)}
+    sql: |
+      SELECT d.year::TEXT AS year,
+             SUM(m.net_sales_after_returns_egp) AS nominal,
+             SUM(m.real_net_sales_egp)          AS real
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: monthly_units
+    title: Monthly units sold
+    type: area
+    width: half
+    format: number
+    x: month
+    series: [{key: units, label: Net units}]
+    sql: |
+      SELECT m.month_start AS month, SUM(m.net_units) AS units
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where} AND d.is_complete_month
+      GROUP BY 1 ORDER BY 1
+
+  - id: retail_events
+    title: Avg daily sales by retail event
+    type: bar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Avg daily net sales}]
+    sql: |
+      SELECT COALESCE(d.retail_event, 'Normal days') AS label,
+             SUM(m.net_sales_after_returns_egp) / NULLIF(COUNT(DISTINCT m.order_date), 0) AS value
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where}
+      GROUP BY 1 ORDER BY 2 DESC
+
+  - id: weekday
+    title: Avg daily sales by weekday
+    type: bar
+    width: half
+    format: egp
+    x: label
+    series: [{key: value, label: Avg daily net sales}]
+    sql: |
+      SELECT d.day_name AS label,
+             SUM(m.net_sales_after_returns_egp) / NULLIF(COUNT(DISTINCT m.order_date), 0) AS value
+      FROM gold.mart_sales_daily m
+      JOIN gold.dim_date d ON d.date_key = m.order_date
+      WHERE {where}
+      GROUP BY d.day_of_week, d.day_name ORDER BY d.day_of_week

@@ -1,0 +1,107 @@
+id: product_profitability
+title: Product Profitability & Margin
+group: Products
+order: 40
+icon: package
+description: Margin by product and category, the products that carry the business (Pareto) and the ones with the weakest margin.
+
+columns:
+  date: s.order_date
+  branch: s.branch_id
+  channel: s.sales_channel
+
+kpis:
+  - id: margin_pct
+    label: Gross margin
+    format: pct
+    sql: |
+      SELECT SUM(s.margin_after_returns_egp) / NULLIF(SUM(s.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: margin_egp
+    label: Gross margin (EGP)
+    format: egp
+    sql: |
+      SELECT SUM(s.margin_after_returns_egp) AS value FROM gold.fact_sales_line s WHERE {where}
+  - id: margin_per_unit
+    label: Margin per unit sold
+    format: egp
+    sql: |
+      SELECT SUM(s.margin_after_returns_egp) / NULLIF(SUM(s.quantity - s.returned_units), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: top10_share
+    label: Sales from top 10 products
+    format: pct
+    sql: |
+      SELECT SUM(v) FILTER (WHERE rnk <= 10) / NULLIF(SUM(v), 0) AS value FROM (
+          SELECT SUM(s.net_sales_after_returns_egp) AS v,
+                 RANK() OVER (ORDER BY SUM(s.net_sales_after_returns_egp) DESC) AS rnk
+          FROM gold.fact_sales_line s WHERE {where} GROUP BY s.product_id
+      ) x
+
+charts:
+  - id: margin_by_category
+    title: Gross margin % by category
+    type: hbar
+    width: half
+    format: pct
+    x: label
+    series: [{key: value, label: Gross margin}]
+    sql: |
+      SELECT p.category AS label,
+             SUM(s.margin_after_returns_egp) / NULLIF(SUM(s.net_sales_after_returns_egp), 0) AS value
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: pareto
+    title: Pareto - cumulative share of sales by product rank
+    type: area
+    width: half
+    format: pct
+    x: rank
+    series: [{key: cumulative_share, label: Cumulative share of sales}]
+    sql: |
+      WITH p AS (
+          SELECT s.product_id, SUM(s.net_sales_after_returns_egp) AS v
+          FROM gold.fact_sales_line s WHERE {where} GROUP BY 1
+      )
+      SELECT ROW_NUMBER() OVER (ORDER BY v DESC) AS rank,
+             SUM(v) OVER (ORDER BY v DESC ROWS UNBOUNDED PRECEDING) / NULLIF(SUM(v) OVER (), 0) AS cumulative_share
+      FROM p ORDER BY rank
+
+  - id: category_table
+    title: Category profitability
+    type: table
+    width: full
+    table_columns:
+      - {key: category, label: Category}
+      - {key: products, label: Products, format: number}
+      - {key: units, label: Units, format: number}
+      - {key: net_sales, label: Net sales, format: egp}
+      - {key: margin, label: Gross margin, format: egp}
+      - {key: margin_pct, label: Margin %, format: pct}
+      - {key: sales_share, label: Share of sales, format: pct}
+    sql: |
+      SELECT p.category, COUNT(DISTINCT p.product_id) AS products,
+             SUM(s.quantity - s.returned_units) AS units,
+             SUM(s.net_sales_after_returns_egp) AS net_sales,
+             SUM(s.margin_after_returns_egp) AS margin,
+             SUM(s.margin_after_returns_egp) / NULLIF(SUM(s.net_sales_after_returns_egp), 0) AS margin_pct,
+             SUM(s.net_sales_after_returns_egp) / NULLIF(SUM(SUM(s.net_sales_after_returns_egp)) OVER (), 0) AS sales_share
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1 ORDER BY margin DESC
+
+  - id: top_margin_products
+    title: Top 15 products by gross margin (EGP)
+    type: table
+    width: full
+    table_columns:
+      - {key: product, label: Product}
+      - {key: category, label: Category}
+      - {key: margin, label: Gross margin, format: egp}
+      - {key: margin_pct, label: Margin %, format: pct}
+    sql: |
+      SELECT p.product_name_ar AS product, p.category,
+             SUM(s.margin_after_returns_egp) AS margin,
+             SUM(s.margin_after_returns_egp) / NULLIF(SUM(s.net_sales_after_returns_egp), 0) AS margin_pct
+      FROM gold.fact_sales_line s JOIN gold.dim_product p ON p.sku_id = s.sku_id
+      WHERE {where} GROUP BY 1, 2 ORDER BY margin DESC LIMIT 15

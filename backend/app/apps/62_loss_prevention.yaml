@@ -1,0 +1,75 @@
+id: loss_prevention
+title: Loss Prevention & Refund Risk
+group: Operations
+order: 62
+icon: shield-alert
+description: Risk signals from returns and refunds - refunds above the value of the items, very fast returns, cash refunds and branches that stand out. (The data has no theft / shrinkage records, so this app focuses on refund risk.)
+
+columns:
+  date: r.return_date
+  branch: r.branch_id
+  channel: r.sales_channel
+
+kpis:
+  - id: over_refunds
+    label: Refunds above item value
+    format: number
+    good: down
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_returns r WHERE {where} AND r.refund_exceeds_value
+  - id: excess_amount
+    label: Excess refunded (raw data)
+    format: egp
+    good: down
+    hint: Reported refund - value of returned items
+    sql: |
+      SELECT SUM(r.refund_reported_egp - r.returned_value_egp) AS value
+      FROM gold.fact_returns r WHERE {where} AND r.refund_exceeds_value
+  - id: fast_returns
+    label: Returns within 1 day
+    format: number
+    good: down
+    sql: |
+      SELECT COUNT(*) AS value FROM gold.fact_returns r WHERE {where} AND r.days_to_return <= 1
+  - id: cash_share
+    label: Refunds paid in cash
+    format: pct
+    good: down
+    sql: |
+      SELECT SUM(r.refund_egp) FILTER (WHERE r.refund_method = 'Cash') / NULLIF(SUM(r.refund_egp), 0) AS value
+      FROM gold.fact_returns r WHERE {where}
+
+charts:
+  - id: excess_by_branch
+    title: Top 15 branches by excess refunded
+    type: hbar
+    width: full
+    format: egp
+    x: label
+    series: [{key: value, label: Excess refunded}]
+    sql: |
+      SELECT b.branch_display_name AS label, SUM(r.refund_reported_egp - r.returned_value_egp) AS value
+      FROM gold.fact_returns r JOIN gold.dim_branch b ON b.branch_id = r.branch_id
+      WHERE {where} AND r.refund_exceeds_value GROUP BY 1 ORDER BY 2 DESC LIMIT 15
+
+  - id: branch_risk
+    title: Branch refund-risk table
+    type: table
+    width: full
+    table_columns:
+      - {key: branch, label: Branch}
+      - {key: returns, label: Returns, format: number}
+      - {key: over_refunds, label: Over-refunds, format: number}
+      - {key: over_rate, label: Over-refund rate, format: pct}
+      - {key: excess, label: Excess refunded, format: egp}
+      - {key: fast, label: Returns within 1 day, format: number}
+      - {key: cash_share, label: Cash refunds, format: pct}
+    sql: |
+      SELECT b.branch_display_name AS branch, COUNT(*) AS returns,
+             COUNT(*) FILTER (WHERE r.refund_exceeds_value) AS over_refunds,
+             AVG(CASE WHEN r.refund_exceeds_value THEN 1.0 ELSE 0 END) AS over_rate,
+             COALESCE(SUM(r.refund_reported_egp - r.returned_value_egp) FILTER (WHERE r.refund_exceeds_value), 0) AS excess,
+             COUNT(*) FILTER (WHERE r.days_to_return <= 1) AS fast,
+             SUM(r.refund_egp) FILTER (WHERE r.refund_method = 'Cash') / NULLIF(SUM(r.refund_egp), 0) AS cash_share
+      FROM gold.fact_returns r JOIN gold.dim_branch b ON b.branch_id = r.branch_id
+      WHERE {where} GROUP BY 1 ORDER BY over_rate DESC

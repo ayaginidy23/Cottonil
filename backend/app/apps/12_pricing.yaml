@@ -1,0 +1,97 @@
+id: pricing
+title: Price & Promotion Intelligence
+group: Sales
+order: 12
+icon: tag
+description: Discount depth and its effect on margin, price inflation over time (price index), and discounting by category.
+
+columns:
+  date: s.order_date
+  branch: s.branch_id
+  channel: s.sales_channel
+
+kpis:
+  - id: discount_rate
+    label: Discount rate
+    format: pct
+    good: down
+    hint: Discount / gross sales
+    sql: |
+      SELECT SUM(s.discount_egp) / NULLIF(SUM(s.gross_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: discounted_share
+    label: Lines sold on discount
+    format: pct
+    sql: |
+      SELECT AVG(CASE WHEN s.discount_egp > 0 THEN 1.0 ELSE 0 END) AS value
+      FROM gold.fact_sales_line s WHERE {where}
+  - id: discount_depth
+    label: Avg discount depth
+    format: pct
+    hint: On discounted lines only
+    sql: |
+      SELECT SUM(s.discount_egp) / NULLIF(SUM(s.gross_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where} AND s.discount_egp > 0
+  - id: margin_full_price
+    label: Margin at full price
+    format: pct
+    sql: |
+      SELECT SUM(s.gross_margin_egp) / NULLIF(SUM(s.net_sales_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where} AND s.discount_egp = 0
+  - id: margin_discounted
+    label: Margin on discounted lines
+    format: pct
+    sql: |
+      SELECT SUM(s.gross_margin_egp) / NULLIF(SUM(s.net_sales_egp), 0) AS value
+      FROM gold.fact_sales_line s WHERE {where} AND s.discount_egp > 0
+
+charts:
+  - id: price_index
+    title: Price index by month (1.0 = 2026 catalog prices)
+    type: area
+    width: half
+    format: decimal
+    x: month
+    series: [{key: price_index, label: Price index}]
+    columns: {date: d.date_key}
+    sql: |
+      SELECT d.month_start AS month, MAX(d.price_index) AS price_index
+      FROM gold.dim_date d
+      WHERE {where} AND d.has_data AND d.price_index IS NOT NULL
+      GROUP BY 1 ORDER BY 1
+
+  - id: yearly_price_growth
+    title: Year-on-year price increase
+    type: bar
+    width: half
+    format: pct
+    x: year
+    series: [{key: growth, label: Price increase vs previous year}]
+    columns: {date: d.date_key}
+    sql: |
+      WITH y AS (
+          SELECT d.year, AVG(d.price_index) AS idx
+          FROM gold.dim_date d WHERE d.has_data AND d.is_complete_month
+          GROUP BY d.year
+      )
+      SELECT y.year::TEXT AS year, y.idx / LAG(y.idx) OVER (ORDER BY y.year) - 1 AS growth
+      FROM y
+      WHERE y.year IN (SELECT DISTINCT d.year FROM gold.dim_date d WHERE {where})
+      ORDER BY y.year
+
+  - id: margin_by_discount
+    title: Gross margin by discount depth
+    type: bar
+    width: full
+    format: pct
+    x: bucket
+    series: [{key: margin_pct, label: Gross margin}]
+    sql: |
+      SELECT bucket, SUM(m) / NULLIF(SUM(n), 0) AS margin_pct FROM (
+          SELECT CASE WHEN s.discount_egp = 0 THEN '1. No discount'
+                      WHEN s.discount_egp / NULLIF(s.gross_egp, 0) < 0.10 THEN '2. Under 10%'
+                      WHEN s.discount_egp / NULLIF(s.gross_egp, 0) < 0.20 THEN '3. 10-20%'
+                      ELSE '4. 20% or more' END AS bucket,
+                 s.gross_margin_egp AS m, s.net_sales_egp AS n
+          FROM gold.fact_sales_line s WHERE {where}
+      ) x GROUP BY bucket ORDER BY bucket
