@@ -86,3 +86,4 @@ charts:
       SELECT m.month_start AS month, SUM(m.spend_egp) AS spend
       FROM gold.fact_marketing m JOIN gold.dim_date d ON d.date_key = m.month_start
       WHERE {where} AND d.is_complete_month GROUP BY 1 ORDER BY 1
+

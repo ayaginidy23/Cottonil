@@ -6,9 +6,10 @@
 // categories fold into "Other".
 // =============================================================================
 
-export const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
-export const NEGATIVE = '#d03b3b'   // used only for negative values (losses)
-export const OTHER = '#a3a29c'
+// brand royal blue first, then hues that stay distinct for colour-blind readers
+export const SERIES = ['#2f6fd6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
+export const NEGATIVE = '#c23b3b'   // used only for negative values (losses)
+export const OTHER = '#a7afbf'
 
 // Same set of labels -> same colours, regardless of their order in the data
 export function colorMap(labels) {

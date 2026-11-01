@@ -5,11 +5,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Calendar, ChevronDown, RotateCcw, Store } from 'lucide-react'
 import { useFilters } from '../lib/filters.jsx'
+import { useLang } from '../lib/i18n.jsx'
 
 function BranchSelect({ branches, selected, onChange }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef(null)
+  const { lang, t } = useLang()
 
   // close the dropdown when clicking outside of it
   useEffect(() => {
@@ -33,14 +35,14 @@ function BranchSelect({ branches, selected, onChange }) {
     <div className="dropdown" ref={ref}>
       <button className="control" onClick={() => setOpen((o) => !o)}>
         <Store size={16} />
-        <span>{selected.length ? `${selected.length} branches` : 'All branches'}</span>
+        <span>{selected.length ? `${selected.length} ${lang === 'ar' ? 'فرع' : 'branches'}` : t('allBranches')}</span>
         <ChevronDown size={14} />
       </button>
       {open && (
         <div className="dropdown-panel">
           <input
             className="input"
-            placeholder="Search id, name or governorate"
+            placeholder={lang === 'ar' ? 'دوّر بالكود أو الاسم أو المحافظة' : 'Search id, name or governorate'}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             autoFocus
@@ -65,7 +67,8 @@ function BranchSelect({ branches, selected, onChange }) {
 }
 
 export default function FilterBar() {
-  const { options, filters, presets, update, reset, error } = useFilters()
+  const { options, draft: filters, presets, update, reset, error } = useFilters()   // the bar shows the draft
+  const { tl } = useLang()
   if (error) return <div className="filterbar error-text">Filters unavailable: {error}</div>
   if (!options) return <div className="filterbar muted">Loading filters…</div>
 
@@ -86,12 +89,12 @@ export default function FilterBar() {
             className={activePreset?.id === p.id ? 'active' : ''}
             onClick={() => update({ dateFrom: p.from, dateTo: p.to })}
           >
-            {p.label}
+            {tl(p.label)}
           </button>
         ))}
       </div>
 
-      <div className="control date-range">
+      <div className="control date-range" dir="ltr">
         <Calendar size={16} />
         <input
           type="date"
@@ -119,7 +122,7 @@ export default function FilterBar() {
             className={`chip ${filters.channels.includes(c) ? 'active' : ''}`}
             onClick={() => toggleChannel(c)}
           >
-            {c}
+            {tl(c)}
           </button>
         ))}
       </div>

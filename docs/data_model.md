@@ -112,9 +112,14 @@ operating_profit = gross margin after returns − operating expenses − payroll
 | Table | Content |
 |---|---|
 | `gold.ml_forecast_monthly` | month × category (+ TOTAL): actual units, forecast, 80% interval, `is_forecast`, method |
+| `gold.ml_product_pairs` | product A × product B bought in the same orders: `together`, `support`, `confidence`, `lift`, `rank_for_a` (best 10 per product) |
 | `gold.ml_model_metrics` | backtest metrics of the forecast vs the baseline |
 | `ai.product_embeddings` | one row per product: description text + embedding vector |
 | `ai.kb_chunks` | store-policy knowledge base split by heading + embeddings |
 | `ai.schema_docs` | one description per gold table + embedding (schema RAG) |
 | `ai.product_images` | product id -> image URL (optional) |
 | `app.chat_sessions`, `app.chat_messages`, `app.chat_memory` | chat history and long-term memory |
+| `app.security_events` | every time a safety rule of the assistants fired (kind, severity, who, what was done) |
+| `app.promotions` | offers managed on the Offers page: scope (category / audience / order), target, min pieces, discount, dates, active |
+| `app.b2b_quotes` | wholesale price quotes made by the Shopping Assistant (for the PDF page) |
+| `app.analyst_reports` | Report Agent reports (text EN + AR, query results for the charts) |

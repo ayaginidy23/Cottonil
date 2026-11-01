@@ -6,7 +6,9 @@
 - **KPI comparison:** every KPI is also computed for the previous period of the same length. The change is shown as a relative % for amounts and in **percentage points (pp)** for KPIs that are already a percentage. There is no comparison when the previous period starts before the data (e.g. "All time"). `good: down` makes a decrease green (costs, returns).
 - **Complete months only** in monthly trend charts (`dim_date.is_complete_month`), so a running month never looks like a drop.
 - Results are cached in memory; `POST /api/apps/reload` re-reads the YAML files.
-- Frontend: one generic page renders any app. Chart types: line, area, bar, horizontal bar, donut, table. Every chart has a **table view**, tables have a **CSV export**, and the palette is colour-blind safe.
+- Frontend: one generic page renders any app. Chart types: line, area, bar, horizontal bar, donut, table and **map** (one bubble per Egyptian governorate, sized by the first series; names are matched after normalising Arabic spelling, and big cities map to their governorate). Every chart has a **table view**, tables have a **CSV export**, and the palette is colour-blind safe. An optional `note:` explains a chart under its title.
+- **Arabic / English:** the switch in the top bar translates the whole UI, including every YAML label (`frontend/src/lib/labels_ar.json`, keyed by the English text; a missing label stays English) and switches to right-to-left. Numbers keep Latin digits.
+- **Explain this page** and **Download PDF** buttons on every dashboard (see `ai_assistants.md`).
 - **Period presets:** Last 12 months (complete months, the default), Year to date, last full year, All time, or custom dates.
 
 ## The 16 dashboards
@@ -138,6 +140,15 @@ Risk signals from returns and refunds - refunds above the value of the items, ve
 - **KPIs:** Refunds above item value · Excess refunded (raw data) · Returns within 1 day · Refunds paid in cash
 - **Charts:** Top 15 branches by excess refunded · Branch refund-risk table
 - **What to look for:** Refunds above the value of the returned items (decision D1), very fast returns, cash refunds, and branches with the highest excess refunded.
+
+## Other pages
+
+| Page | What it does |
+|---|---|
+| Product Explorer (`/products`) | every catalog product with its photo, price and the period's sales, margin and returns; search, filter, sort |
+| Product page (`/products/<id>`) | KPIs, monthly units, sizes (with return rate), colours, best branches, the category forecast; PDF |
+| What-if Simulator (`/simulator`) | "what if we give X% discount?" for a category: baseline = last 12 complete months from `/api/simulator/baseline`; new units = units x (1 - discount)^elasticity; shows sales, gross margin and the **break-even discount**. Elasticity is an assumption the manager sets (the data cannot measure it reliably) |
+| Insight Scout, Report Agent, Security Log | see `ai_assistants.md` |
 
 ## Adding a dashboard
 1. Copy an existing YAML file in `backend/app/apps/` and change `id`, `title`, `group`, `order`.

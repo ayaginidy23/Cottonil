@@ -4,13 +4,20 @@
 // Every answer shows: the text answer, an automatic chart of the result
 // (reusing ChartCard, with its table view), and the SQL that produced it -
 // so managers can trust and check the numbers.
+//
+// Talk mode ("talk to your data"): a hands-free conversation. The mic listens,
+// the question is sent automatically when the manager stops talking, the answer
+// is read aloud, then the mic listens again. Uses the browser's free speech API.
 // =============================================================================
 import { useEffect, useRef, useState } from 'react'
-import { BarChart3, Bot, Send, User } from 'lucide-react'
+import { Link, useLocation } from 'react-router-dom'
+import { AudioLines, BarChart3, Bot, FileText, Send, User } from 'lucide-react'
 import ChartCard from '../components/ChartCard.jsx'
 import MemoryPanel from '../components/MemoryPanel.jsx'
 import { MicButton, SpeakButton } from '../components/VoiceControls.jsx'
 import { api } from '../lib/api.js'
+import { autoChart } from '../lib/autochart.js'
+import { canListen, canSpeak, speak, stopSpeaking, useVoiceInput } from '../lib/speech.js'
 
 const SUGGESTIONS = [
   'أكتر 10 فروع ربحًا في 2025؟',
@@ -20,47 +27,6 @@ const SUGGESTIONS = [
   'كام عميل في كل شريحة RFM وإيرادهم كام؟',
   'What is the demand forecast for the next 6 months by category?',
 ]
-
-// Guess how to show a value column from its name and values
-function guessFormat(col, rows) {
-  const name = col.toLowerCase()
-  const max = Math.max(...rows.map((r) => Math.abs(Number(r[col]) || 0)))
-  if (/(pct|rate|share|ratio|margin_pct|growth)/.test(name) && max <= 1.5) return 'pct'
-  if (/(egp|sales|revenue|profit|value|cost|amount|spend|refund|margin)/.test(name)) return 'egp'
-  if (/usd/.test(name)) return 'usd'
-  return 'number'
-}
-
-// Build a ChartCard spec from any result table (or null if it isn't chartable)
-function autoChart(columns, rows) {
-  if (!rows?.length || rows.length < 2 || columns.length < 2) return null
-  const isNum = (c) => rows.every((r) => r[c] === null || typeof r[c] === 'number')
-  const numeric = columns.filter(isNum)
-  const labels = columns.filter((c) => !isNum(c))
-  if (!numeric.length) return null
-  const x = labels[0] || columns[0]
-  let values = numeric.filter((c) => c !== x)
-  if (!values.length) return null
-
-  // one axis only: keep extra series only if they have a similar scale to the first
-  const maxOf = (c) => Math.max(...rows.map((r) => Math.abs(Number(r[c]) || 0))) || 1
-  const base = maxOf(values[0])
-  values = values.filter((c, i) => i === 0 || (maxOf(c) / base < 10 && maxOf(c) / base > 0.1)).slice(0, 3)
-
-  const timeLike = rows.every((r) => /^\d{4}(-\d{2})?(-\d{2})?/.test(String(r[x])))
-  const type = timeLike ? 'line' : rows.length > 12 ? 'hbar' : 'bar'
-  return {
-    id: 'auto',
-    title: 'Result',
-    type: type === 'hbar' && values.length > 1 ? 'bar' : type,
-    width: 'full',
-    x,
-    series: values.map((c) => ({ key: c, label: c })),
-    format: guessFormat(values[0], rows),
-    data: type === 'hbar' ? rows.slice(0, 25) : rows,
-    table_columns: columns.map((c) => ({ key: c, label: c, format: isNum(c) && c !== x ? guessFormat(c, rows) : undefined })),
-  }
-}
 
 export default function AnalystChat() {
   const [messages, setMessages] = useState([])
@@ -72,6 +38,33 @@ export default function AnalystChat() {
   const [saving, setSaving] = useState(false)
   const endRef = useRef(null)
 
+  // ---- talk mode ----
+  const [talk, setTalk] = useState(false)
+  const [talkLang, setTalkLang] = useState('ar-EG')
+  const talkRef = useRef(false)
+  const sendRef = useRef(null)
+  const voice = useVoiceInput(setInput, (heard) => {
+    if (!talkRef.current) return
+    if (heard.trim()) sendRef.current?.(heard)
+    else stopTalk()                                   // silence: end talk mode instead of looping
+  })
+  const startTalk = () => {
+    talkRef.current = true
+    setTalk(true)
+    stopSpeaking()
+    voice.start(talkLang)
+  }
+  function stopTalk() {
+    talkRef.current = false
+    setTalk(false)
+    voice.stop()
+    stopSpeaking()
+  }
+
+  // a question coming from the Insight Scout ("Ask the analyst")
+  const location = useLocation()
+  const askedRef = useRef(false)
+
   // restore the open chat + memory after a refresh
   useEffect(() => {
     let cancelled = false
@@ -79,6 +72,7 @@ export default function AnalystChat() {
       .then((res) => {
         if (cancelled) return
         setMemory(res.memory || '')
+        if (askedRef.current) return                   // a new question from the Insight Scout: fresh chat
         if (res.session) {
           setSessionId(res.session.session_id)
           setMessages(res.session.messages.map((m) => ({
@@ -134,12 +128,24 @@ export default function AnalystChat() {
       const res = await api.chatAnalyst(next.map(({ role, content: c }) => ({ role, content: c })), sessionId)
       setSessionId(res.session_id || sessionId)
       setMessages([...next, { role: 'assistant', content: res.reply, result: res }])
+      if (talkRef.current) speak(res.reply, () => talkRef.current && voice.start(talkLang))
     } catch (e) {
       setError(e.message)
+      if (talkRef.current) stopTalk()
     } finally {
       setBusy(false)
     }
   }
+  sendRef.current = send
+
+  useEffect(() => {
+    const q = location.state?.ask
+    if (q && !askedRef.current) {
+      askedRef.current = true
+      send(q)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   return (
     <div className="chat-page">
@@ -166,6 +172,24 @@ export default function AnalystChat() {
               </button>
             ))}
           </div>
+          {canListen && canSpeak && (
+            <div className="talk-box">
+              <div className="kpi-label">Talk to your data · كلّم الداتا</div>
+              <div className="talk-row">
+                <button className={`talk-btn ${talk ? 'on' : ''}`} onClick={() => (talk ? stopTalk() : startTalk())}>
+                  <AudioLines size={16} /> {talk ? (voice.listening ? 'Listening… · بسمعك' : busy ? 'Thinking… · بفكر' : 'Speaking… · بتكلم') : 'Start talk mode'}
+                </button>
+                <button className="lang-btn" disabled={talk} onClick={() => setTalkLang((l) => (l === 'ar-EG' ? 'en-US' : 'ar-EG'))}>
+                  {talkLang === 'ar-EG' ? 'ع' : 'EN'}
+                </button>
+              </div>
+              <div className="muted small">Ask by voice; the answer is read aloud, then it listens again. Stop any time.</div>
+            </div>
+          )}
+          <Link to="/ai/reports" className="side-note side-link">
+            <FileText size={16} />
+            <span>Need a full report with charts (PDF, English + Arabic)? Open the Report Agent →</span>
+          </Link>
           <div className="side-note" style={{ marginTop: 10 }}>
             <BarChart3 size={16} />
             <span>Read-only: queries run as a role that can only SELECT from the gold layer, with a 15 s limit.</span>

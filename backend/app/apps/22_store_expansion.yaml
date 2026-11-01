@@ -28,6 +28,28 @@ kpis:
              / NULLIF((SELECT COUNT(*) FROM gold.dim_branch), 0) AS value
 
 charts:
+  - id: demand_map
+    title: Demand map - registered customers and branches per governorate
+    type: map
+    width: full
+    format: number
+    x: governorate
+    note: Bubble size = registered customers living in the governorate. Compare it with the number of branches (hover a bubble) to spot governorates that need another branch.
+    series:
+      - {key: customers, label: Registered customers}
+      - {key: branches, label: Branches}
+      - {key: customers_per_branch, label: Customers / branch}
+    columns: {}
+    sql: |
+      WITH c AS (SELECT governorate_ar AS gov, COUNT(*) AS customers
+                 FROM gold.dim_customer WHERE NOT is_guest AND governorate_ar IS NOT NULL GROUP BY 1),
+           b AS (SELECT governorate_ar AS gov, COUNT(*) AS branches FROM gold.dim_branch GROUP BY 1)
+      SELECT COALESCE(c.gov, b.gov) AS governorate, COALESCE(c.customers, 0) AS customers,
+             COALESCE(b.branches, 0) AS branches,
+             COALESCE(c.customers, 0)::NUMERIC / NULLIF(b.branches, 0) AS customers_per_branch
+      FROM c FULL JOIN b ON b.gov = c.gov
+      ORDER BY customers DESC
+
   - id: opportunity_table
     title: Demand vs network by governorate (expansion candidates first)
     type: table

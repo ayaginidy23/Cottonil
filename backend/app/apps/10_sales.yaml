@@ -101,3 +101,4 @@ charts:
       JOIN gold.dim_date d ON d.date_key = m.order_date
       WHERE {where}
       GROUP BY d.day_of_week, d.day_name ORDER BY d.day_of_week
+

@@ -1,12 +1,14 @@
 // =============================================================================
 // ChartCard.jsx - Draws ANY chart described in an app YAML
-//   type: line | area | bar | hbar | donut | table
+//   type: line | area | bar | hbar | donut | table | map (Egypt governorates)
 //   x: column for the category / time axis
 //   series: [{key, label}] columns to plot
 //   format: how values are shown (egp, pct, number...)
+//   note:   optional explanation shown under the title
 // Every chart also has a "table view" toggle (accessibility + exact numbers).
+// Titles, series names and category labels follow the language switch.
 // =============================================================================
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -16,6 +18,10 @@ import { BarChart3, Table2 } from 'lucide-react'
 import DataTable from './DataTable.jsx'
 import { NEGATIVE, OTHER, SERIES, colorMap } from '../lib/colors.js'
 import { fmt, fmtAxisLabel } from '../lib/format.js'
+import { Bi, useLang } from '../lib/i18n.jsx'
+
+// the map library is big, so it is only downloaded when a page has a map
+const MapChart = lazy(() => import('./MapChart.jsx'))
 
 const AXIS = { stroke: 'var(--axis)', fontSize: 12, tickLine: false }
 const GRID = <CartesianGrid vertical={false} stroke="var(--grid)" />
@@ -42,10 +48,10 @@ function niceScale(rows, keys, count = 5) {
 
 const niceAxis = ({ domain, ticks }) => ({ domain, ticks, interval: 0 })
 
-function tooltipProps(format) {
+function tooltipProps(format, xfmt = fmtAxisLabel) {
   return {
     formatter: (v, name) => [fmt(v, format, { compact: false }), name],
-    labelFormatter: fmtAxisLabel,
+    labelFormatter: xfmt,
     contentStyle: {
       background: 'var(--surface)',
       border: '1px solid var(--border)',
@@ -64,7 +70,7 @@ function foldOther(rows, x, key, keep = 7) {
   return [...top, { [x]: 'Other', [key]: rest }]
 }
 
-function Plot({ chart }) {
+function Plot({ chart, xfmt }) {
   const { type, data, x, series = [], format } = chart
   const multi = series.length > 1
   const yTick = (v) => fmt(v, format, { short: true })
@@ -75,9 +81,9 @@ function Plot({ chart }) {
       <ResponsiveContainer width="100%" height={300}>
         <Chart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
           {GRID}
-          <XAxis dataKey={x} tickFormatter={fmtAxisLabel} {...AXIS} minTickGap={24} />
+          <XAxis dataKey={x} tickFormatter={xfmt} {...AXIS} minTickGap={24} />
           <YAxis tickFormatter={yTick} {...AXIS} width={86} />
-          <Tooltip {...tooltipProps(format)} />
+          <Tooltip {...tooltipProps(format, xfmt)} />
           {multi && <Legend iconType="plainline" wrapperStyle={{ fontSize: 13 }} />}
           {series.map((s, i) =>
             type === 'line' ? (
@@ -96,17 +102,17 @@ function Plot({ chart }) {
   if (type === 'bar') {
     const single = !multi
     // tilt the labels when they would collide (many bars or long names)
-    const longest = Math.max(...data.map((r) => String(fmtAxisLabel(r[x]) ?? '').length))
+    const longest = Math.max(...data.map((r) => String(xfmt(r[x]) ?? '').length))
     const tilt = data.length > 8 || longest * data.length > 55
     return (
       <ResponsiveContainer width="100%" height={tilt ? 330 : 300}>
         <BarChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 0 }} barGap={2}>
           {GRID}
-          <XAxis dataKey={x} tickFormatter={fmtAxisLabel} {...AXIS} interval={0}
+          <XAxis dataKey={x} tickFormatter={xfmt} {...AXIS} interval={0}
             angle={tilt ? -30 : 0} textAnchor={tilt ? 'end' : 'middle'}
             height={tilt ? 80 : 30} />
           <YAxis tickFormatter={yTick} {...AXIS} width={86} {...niceAxis(niceScale(data, series.map((se) => se.key)))} />
-          <Tooltip {...tooltipProps(format)} cursor={{ fill: 'var(--hover)' }} />
+          <Tooltip {...tooltipProps(format, xfmt)} cursor={{ fill: 'var(--hover)' }} />
           {multi && <Legend wrapperStyle={{ fontSize: 13 }} />}
           <ReferenceLine y={0} stroke="var(--axis)" />
           {series.map((s, i) => (
@@ -129,8 +135,8 @@ function Plot({ chart }) {
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 0 }}>
           <CartesianGrid horizontal={false} stroke="var(--grid)" />
           <XAxis type="number" tickFormatter={yTick} {...AXIS} {...niceAxis(niceScale(data, [s.key]))} />
-          <YAxis type="category" dataKey={x} {...AXIS} width={150} interval={0} />
-          <Tooltip {...tooltipProps(format)} cursor={{ fill: 'var(--hover)' }} />
+          <YAxis type="category" dataKey={x} tickFormatter={xfmt} {...AXIS} width={150} interval={0} />
+          <Tooltip {...tooltipProps(format, xfmt)} cursor={{ fill: 'var(--hover)' }} />
           <ReferenceLine x={0} stroke="var(--axis)" />
           <Bar dataKey={s.key} name={s.label} radius={[0, 4, 4, 0]} maxBarSize={20}>
             {data.map((row, j) => (
@@ -144,7 +150,7 @@ function Plot({ chart }) {
 
   if (type === 'donut') {
     const key = series[0]?.key || 'value'
-    const rows = foldOther(data, x, key)
+    const rows = foldOther(data, x, key).map((r) => ({ ...r, [x]: xfmt(r[x]) }))
     const colors = colorMap(rows.map((r) => r[x]))
     const total = rows.reduce((s, r) => s + Number(r[key] || 0), 0)
     return (
@@ -156,11 +162,19 @@ function Plot({ chart }) {
               <Cell key={r[x]} fill={colors[String(r[x])] || OTHER} />
             ))}
           </Pie>
-          <Tooltip {...tooltipProps(format)}
+          <Tooltip {...tooltipProps(format, xfmt)}
             formatter={(v, n) => [`${fmt(v, format, { compact: false })} (${((v / total) * 100).toFixed(1)}%)`, n]} />
           <Legend layout="horizontal" verticalAlign="bottom" wrapperStyle={{ fontSize: 12 }} />
         </PieChart>
       </ResponsiveContainer>
+    )
+  }
+
+  if (type === 'map') {
+    return (
+      <Suspense fallback={<div className="empty">…</div>}>
+        <MapChart chart={chart} />
+      </Suspense>
     )
   }
 
@@ -169,37 +183,41 @@ function Plot({ chart }) {
 
 export default function ChartCard({ chart }) {
   const [asTable, setAsTable] = useState(false)
+  const { t, tl } = useLang()
   const { title, type, data = [], x, series = [], format, error, table_columns: tableColumns } = chart
 
   // columns for the table view of a normal chart
-  const columns = tableColumns || [
+  const columns = (tableColumns || [
     { key: x, label: x },
-    ...series.map((s) => ({ key: s.key, label: s.label, format: format || 'number' })),
-  ]
+    ...series.map((s) => ({ key: s.key, label: s.label, format: s.format || format || 'number' })),
+  ]).map((c) => ({ ...c, label: tl(c.label) }))
   const showTable = type === 'table' || asTable
+  const shown = { ...chart, series: series.map((s) => ({ ...s, label: tl(s.label) })) }
+  const xfmt = (v) => tl(fmtAxisLabel(v))
 
   return (
     <div className={`card chart w-${chart.width || 'half'}`}>
       <div className="chart-head">
-        <h3>{title}</h3>
+        <h3><Bi text={title} /></h3>
         {type !== 'table' && !error && data.length > 0 && (
-          <button className="icon-btn" onClick={() => setAsTable((t) => !t)}
-            title={asTable ? 'Show chart' : 'Show table'} aria-label="Toggle table view">
+          <button className="icon-btn no-print" onClick={() => setAsTable((v) => !v)}
+            title={asTable ? t('showChart') : t('showTable')} aria-label="Toggle table view">
             {asTable ? <BarChart3 size={16} /> : <Table2 size={16} />}
           </button>
         )}
       </div>
+      {chart.note && <p className="chart-note muted small">{tl(chart.note)}</p>}
       {error ? (
         <div className="error-box">
-          <strong>Query error</strong>
+          <strong>{t('queryError')}</strong>
           <code>{error}</code>
         </div>
       ) : data.length === 0 ? (
-        <div className="empty">No data for the selected filters</div>
+        <div className="empty">{t('noData')}</div>
       ) : showTable ? (
         <DataTable rows={data} columns={columns} filename={chart.title || chart.id} />
       ) : (
-        <Plot chart={chart} />
+        <div dir="ltr"><Plot chart={shown} xfmt={xfmt} /></div>
       )}
     </div>
   )

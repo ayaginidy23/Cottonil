@@ -9,9 +9,11 @@
 // =============================================================================
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 import { fmt } from '../lib/format.js'
+import { Bi, useLang } from '../lib/i18n.jsx'
 
 export default function KpiCard({ kpi }) {
   const { label, value, format, hint, change_pct: change, change_unit: unit, good, error } = kpi
+  const { t, tl } = useLang()
 
   let tone = 'neutral'
   let Arrow = Minus
@@ -23,26 +25,26 @@ export default function KpiCard({ kpi }) {
 
   return (
     <div className="card kpi">
-      <div className="kpi-label">{label}</div>
+      <div className="kpi-label"><Bi text={label} /></div>
       {error ? (
-        <div className="error-text small">Query error</div>
+        <div className="error-text small">{t('queryError')}</div>
       ) : (
-        <div className="kpi-value" title={fmt(value, format, { compact: false })}>
+        <div className="kpi-value" dir="ltr" title={fmt(value, format, { compact: false })}>
           {fmt(value, format)}
         </div>
       )}
       <div className="kpi-foot">
         {change !== null && change !== undefined && (
           <>
-            <span className={`delta ${tone}`}>
+            <span className={`delta ${tone}`} dir="ltr">
               <Arrow size={14} />
               {change > 0 ? '+' : ''}
               {(change * 100).toFixed(1)}{unit === 'pp' ? ' pp' : '%'}
             </span>
-            <span className="muted small">vs previous period</span>
+            <span className="muted small">{t('vsPrev')}</span>
           </>
         )}
-        {hint && <span className="kpi-hint muted small" title={hint}>{hint}</span>}
+        {hint && <span className="kpi-hint muted small" title={tl(hint)}>{tl(hint)}</span>}
       </div>
     </div>
   )

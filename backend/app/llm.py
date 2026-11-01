@@ -80,6 +80,13 @@ def _short_reason(e: Exception) -> str:
     return str(e)[:150]
 
 
+def _bad_key(e: Exception) -> bool:
+    """401/403, or Gemini's "400 Invalid Auth key" / "API key not valid"."""
+    if not isinstance(e, APIStatusError):
+        return False
+    return e.status_code in (401, 403) or (e.status_code == 400 and "key" in str(e).lower())
+
+
 def chat_completion(**kwargs):
     """Call the chat model; on errors try the other keys/models (see top of file)."""
     if not API_KEYS:
@@ -98,7 +105,7 @@ def chat_completion(**kwargs):
                     failures[label] = _short_reason(e)
                     if isinstance(e, RateLimitError):
                         any_rate_limited = True
-                    if isinstance(e, APIStatusError) and e.status_code in (401, 403):
+                    if _bad_key(e):
                         break                      # bad key: no point trying other models with it
         if not any_rate_limited or round_no == 1:
             break
@@ -106,7 +113,7 @@ def chat_completion(**kwargs):
 
     summary = "; ".join(f"{m}: {r}" for m, r in failures.items())
     quota = (any(r.startswith("429") for r in failures.values())
-             and not any(r.startswith(("401", "403")) for r in failures.values()))
+             and not any(r.startswith(("401", "403")) or "key" in r.lower() for r in failures.values()))
     raise LLMError(f"All AI models failed -> {summary}", rate_limited=quota)
 
 
@@ -117,14 +124,23 @@ def _embed_one(text: str) -> tuple[float, ...]:
 
 
 def _embed_batch(texts: list[str]) -> list[list[float]]:
-    last = None
+    last, bad = None, set()
     for attempt in range(3):                       # free tier: retry briefly on "429 quota"
         for key in API_KEYS:
+            if key in bad:
+                continue
             try:
                 resp = client(key).embeddings.create(model=EMBED_MODEL, input=texts)
                 return [d.embedding for d in resp.data]
             except RateLimitError as e:
                 last = e
+            except APIStatusError as e:
+                if not _bad_key(e):
+                    raise
+                last = e
+                bad.add(key)                       # invalid key: skip it, try the next one
+        if len(bad) == len(API_KEYS):
+            raise LLMError(f"No valid API key -> {_short_reason(last)}", rate_limited=False)
         time.sleep(4 * (attempt + 1))
     raise LLMError(f"Embedding model failed -> {_short_reason(last)}", rate_limited=True)
 
@@ -142,3 +158,19 @@ def embed(texts: list[str]) -> list[list[float]]:
 def to_pgvector(vec: list[float]) -> str:
     """pgvector reads vectors written like '[0.12,-0.5,...]'."""
     return "[" + ",".join(f"{x:.7f}" for x in vec) + "]"
+
+
+def parse_json(text: str):
+    """Read the JSON object a model returned (it sometimes wraps it in ```json fences
+    or adds a sentence before it). Raises ValueError if there is no JSON object."""
+    import json
+    if not text:
+        raise ValueError("empty answer")
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError("no JSON object in the answer")
+        return json.loads(cleaned[start:end + 1])

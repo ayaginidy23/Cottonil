@@ -1,9 +1,13 @@
 # Cottonil Data & AI Platform
 
-A full data and AI platform for **Cottonil**, the Egyptian cotton apparel retailer (HVIA Task 3).
-It turns 23 raw business tables and the product catalog into a clean data warehouse, 16 interactive
-dashboards, a demand-forecasting model, and two AI assistants: a shopping chatbot for customers and
-resellers, and a business analyst for management.
+An end-to-end data and AI platform for **Cottonil**, the Egyptian cotton apparel brand (HVIA Task 3).
+
+The idea in one line: take the company's raw data, make it clean and trustworthy, then put it in the
+hands of managers and customers through dashboards and AI assistants.
+
+```
+Raw CSV files  ->  Data engineering (Bronze, Silver, Gold)  ->  Dashboards and forecasting  ->  AI assistants
+```
 
 > **Data note:** the transactional data is partly generated, so some distributions are uniform by
 > design. The dashboards and docs say so where it matters. The data files and generated reports are
@@ -13,14 +17,29 @@ resellers, and a business analyst for management.
 
 ## What it does
 
-| Area | What you get |
-|---|---|
-| **Data warehouse** | PostgreSQL medallion architecture (bronze -> silver -> gold), 64 data-quality checks, documented cleaning decisions, and automatic reconciliation of gold vs silver |
-| **16 dashboards** | One YAML file per dashboard; shared filters (period, branches, channel); KPIs compared with the previous period; every chart has a table view and CSV export |
-| **Demand forecast (ML)** | Holt-Winters per category, backtested against a seasonal-naive baseline; the forecast beats the baseline in every category |
-| **Shopping Assistant** | Chatbot for customers and resellers: semantic product search (RAG + pgvector), search by photo, branches, store policy, and the logged-in customer's own orders and reorder suggestions |
-| **Business Analyst** | Ask a question in Arabic or English, get the answer, a chart and the SQL. Uses schema RAG to pick the right tables and runs read-only SQL on gold only |
-| **Extras** | Voice input and read-aloud, chat history plus long-term memory per user, product photos, Arabic UI support (RTL text) |
+### Data engineering
+- **Medallion architecture** on PostgreSQL: bronze (raw, as loaded) -> silver (typed, cleaned) -> gold (star schema and marts), built from 23 raw business tables and the product catalog
+- **64 data-quality checks**, investigations and documented cleaning decisions; **no row is ever deleted**
+- **Automatic reconciliation** of gold against silver, so every dashboard number can be traced to the source
+- **Inflation-adjusted ("real") values** next to nominal EGP, to separate real growth from price increases
+
+### Analytics and machine learning
+- **16 dashboards**, one YAML file each, with shared filters (period, branches, channel), KPIs compared with the previous period, a table view and CSV export for every chart, and **Egypt maps** by governorate
+- **Explain this page:** an AI summary of the page being viewed, in English and Egyptian Arabic, read aloud on request
+- **Download PDF** of any dashboard or product page, with titles and the AI summary in both languages
+- **Arabic / English interface** with right-to-left layout
+- **Product Explorer** and a page per product (photo, sales, sizes, colours, best branches, category forecast)
+- **What-if Simulator:** the effect of a discount on units, sales and gross margin, with the break-even discount
+- **Demand forecast** (Holt-Winters per category), backtested against a seasonal baseline. Models with no real signal (churn, anomalies, market basket) were tested, documented and left out
+
+### AI assistants
+- **Shopping Assistant** (customers and resellers): semantic product search (RAG + pgvector), search by photo, size advice, product comparison, complete-the-look, current offers, a cart that applies the best offer and sends the order on WhatsApp, wholesale price quotes as bilingual PDF, branches, store policy, and the logged-in customer's own orders. Understands Arabic, English and Franco-Arabic
+- **Business Analyst** (management): a question in Arabic or English -> schema RAG picks the tables -> safe read-only SQL -> answer, chart and the SQL. Hands-free **talk to your data** voice mode
+- **Report Agent:** one topic -> a full management report with charts, in English and Egyptian Arabic, as PDF
+- **Insight Scout:** finds what changed in the business (categories, branches, channels, margin, returns, customers, stock, forecast) and suggests the next step
+- **Offers:** management adds, pauses and deletes offers; the chatbot announces them and the cart applies them
+- **Security Log:** every blocked attempt (unsafe SQL, reading outside gold, another customer's order, company-data questions, prompt injection) is recorded and shown
+- **Memory:** chat history plus long-term memory per user ("New chat" summarises, "Forget" deletes)
 
 ---
 
@@ -33,28 +52,31 @@ CSV files ──► BRONZE (raw text, as loaded)
              SILVER ──► quality_checks.sql ──► investigations.sql
                 │  silver_fixes.sql   cleaning decisions D1-D4 + price index (no rows deleted)
                 ▼
-             GOLD   star schema: 7 dimensions, 10 facts, 4 marts + ML tables
+             GOLD   star schema: dimensions, facts, marts + ML tables
                 │
-     ┌──────────┼───────────────┬───────────────────┐
-     ▼          ▼               ▼                   ▼
-  FastAPI    ML forecast    AI index (pgvector)   Business Analyst
-  (YAML apps)                products / policies / (read-only role,
-     │                       schema docs           gold only)
+     ┌──────────┼───────────────┬────────────────────┐
+     ▼          ▼               ▼                    ▼
+  FastAPI    ML forecast    AI index (pgvector)    AI assistants and tools
+  (YAML apps,               products, policies,    (shopping tools only; analyst:
+   products,                schema docs            read-only role on gold only)
+   offers)
+     │
      ▼
-  React dashboard + chat pages
+  React: dashboards, product pages, simulator, AI tools, chat pages, bilingual PDFs
 ```
 
-**Stack:** PostgreSQL 16 + pgvector (Docker) · Python (pandas, SQLAlchemy, psycopg, statsmodels) ·
-FastAPI · React + Vite + Recharts · Google Gemini via the OpenAI-compatible API.
+**Stack:** PostgreSQL 16 + pgvector (Docker) · SQL · Python (pandas, SQLAlchemy, psycopg, statsmodels) ·
+FastAPI · React + Vite + Recharts + Leaflet · Google Gemini via the OpenAI-compatible API (function calling,
+embeddings, vision) · RAG · Web Speech API.
 
 ---
 
 ## Repository layout
 
 ```
-docker-compose.yml        PostgreSQL (pgvector) + pgAdmin
+docker-compose.yml        PostgreSQL + pgvector and pgAdmin
 requirements.txt          Python packages for ETL / ML / AI scripts
-.env.example              Settings template (copy to .env)
+.env.example              settings template (copy to .env)
 
 etl/                      Python runners for every pipeline step
   profile_data.py           profile the raw CSV files
@@ -63,29 +85,30 @@ etl/                      Python runners for every pipeline step
   check_quality.py          runs sql/quality_checks.sql  -> reports/quality_report.md
   investigate.py            runs sql/investigations.sql  -> reports/investigation_report.md
   build_gold.py             runs sql/build_gold.sql and prints the reconciliation
-sql/                      All transformations, step by step ("-- @step:" blocks)
-docs/                     project documentation (start with docs/README.md)
-  architecture.md           components, schemas, technology, run order
-  data_pipeline.md          bronze -> silver -> gold, quality checks, investigations, cleaning decisions
-  data_model.md             every gold table and calculated column
-  dashboards.md             the YAML app engine and the 16 dashboards
-  ai_assistants.md          Shopping Assistant, Business Analyst, memory, security
-  machine_learning.md       forecast method and evaluation, experiments not used
-  data_limitations.md       known limits of the generated data and how they are handled
+sql/                      all transformations, step by step ("-- @step:" blocks)
 ml/
   forecast_demand.py        demand forecast used by the app
-  run_ml.py                 runs the models used by the app
+  market_basket.py          "bought together" rules (tested; no real signal in this data)
+  run_ml.py                 runs the models
   experiments/              churn and anomaly experiments (not used, see docs)
 ai/
-  check_llm.py              checks the API key, models, embeddings and pgvector
+  check_llm.py              checks every API key, the models, embeddings and pgvector
   build_index.py            builds the RAG indexes + the read-only analyst role
-  fetch_product_images.py   optional: product photos from the public website
+  fetch_product_images.py   real product photos and links from the public store
   knowledge/                demo store-policy text for the chatbot
 backend/                  FastAPI
   app/apps/*.yaml           one file per dashboard (KPIs + charts + SQL)
-  app/engine.py             runs an app with the current filters
-  app/chat/                 shopping assistant, business analyst, memory, image search
-frontend/                 React app (dashboards + chat pages)
+  app/engine.py             runs a dashboard with the current filters (parallel queries, cache)
+  app/chat/                 shopping assistant + tools, business analyst, memory, image search,
+                            explain page, insight scout, report agent
+  app/promotions.py         offers
+  app/security_log.py       records every time a safety rule fires
+  app/routers/              apps, chat, ai_tools, products
+frontend/                 React app
+  src/pages/                dashboards, chat pages, AI tools, products, simulator, print pages
+  src/components/           charts, map, KPI cards, cart, compare table, quote card, report view
+  src/lib/                  API calls, filters, Arabic / English (i18n.jsx, labels_ar.json), speech
+docs/                     project documentation (start with docs/README.md)
 ```
 
 ---
@@ -97,7 +120,7 @@ frontend/                 React app (dashboards + chat pages)
 
 ### 1. Settings
 ```bash
-cp .env.example .env        # then fill in the passwords and the API key
+cp .env.example .env        # fill in the passwords and the API key (several keys: key1,key2)
 ```
 
 ### 2. Database
@@ -125,8 +148,8 @@ python etl/build_gold.py     # prints the gold-vs-silver reconciliation (all PAS
 
 ### 5. ML and AI
 ```bash
-python ml/run_ml.py                    # demand forecast
-python ai/check_llm.py                 # verify the API key and models
+python ml/run_ml.py                    # demand forecast (+ market basket experiment)
+python ai/check_llm.py                 # verify every API key and the models
 python ai/build_index.py               # RAG indexes + read-only role (a few minutes on the free tier)
 python ai/fetch_product_images.py      # optional: product photos
 ```
@@ -142,6 +165,9 @@ cd frontend
 npm install
 npm run dev                            # open http://localhost:5173
 ```
+
+The tables for chat memory, offers, quotes, reports and security events are created automatically the
+first time they are used.
 
 ---
 
@@ -164,7 +190,8 @@ To add a dashboard, add a YAML file in `backend/app/apps/`. No frontend code is 
 ## Data cleaning (summary)
 
 No row is ever deleted. Unreliable source values are kept, and corrected columns and flags are added
-next to them. See `docs/data_pipeline.md` for the evidence behind each decision and `docs/data_limitations.md` for the known limits of the data.
+next to them. See `docs/data_pipeline.md` for the evidence behind each decision and
+`docs/data_limitations.md` for the known limits of the data.
 
 - **D1 – Refunds above item value:** refunds are capped at the value of the returned units (`refund_capped_egp`).
 - **D2 – Opening dates:** branches sell before their reported opening date, so `effective_opening_date` = first real activity.
@@ -175,22 +202,21 @@ next to them. See `docs/data_pipeline.md` for the evidence behind each decision 
 
 ---
 
-## AI assistants and security
+## AI security
 
-**Shopping Assistant (customers and resellers)**
-- The model never writes SQL. It can only call 7 fixed, parameterised tools.
+**Shopping Assistant**
+- The model never writes SQL. It can only call 14 fixed, parameterised tools.
 - The customer id is injected by the server, never taken from the model, so a customer can only see their own orders.
-- No tool exposes company sales, costs, employees, suppliers or other customers.
+- No tool returns company sales, costs, employees, suppliers or other customers.
 - Photo search: the vision model describes the photo, then the same semantic search runs. Photos are not stored.
 
-**Business Analyst (management)**
+**Business Analyst and Report Agent**
 - Schema RAG picks the relevant gold tables for each question.
-- Generated SQL must be a single SELECT/WITH statement, with forbidden keywords rejected.
+- Generated SQL must be a single SELECT/WITH statement; forbidden keywords are rejected.
 - It runs in a READ ONLY transaction with a 15-second timeout and at most 200 rows.
 - It runs as the role `cottonil_reader`, which can read the **gold** schema only.
 
-**Memory:** chat history and long-term memory live in schema `app`, keyed per customer (or per browser
-for guests and the analyst). "New chat" summarises the chat into memory; "Forget" deletes it.
+**Security Log:** every blocked attempt is recorded in `app.security_events` and shown on the Security Log page.
 
 ---
 
@@ -198,15 +224,35 @@ for guests and the analyst). "New chat" summarises the chat into memory; "Forget
 
 | Model | Result | Decision |
 |---|---|---|
-| Demand forecast (Holt-Winters per category) | Clearly lower error than the seasonal-naive baseline in the backtest | **Used** in the Forecasting dashboard |
+| Demand forecast (Holt-Winters per category) | Lower error than the seasonal-naive baseline in the backtest, for the total and every category | **Used** in the Forecasting dashboard and product pages |
 | Churn prediction (gradient boosting) | No better than random on this data | Not used; churn is shown rule-based (inactive 12+ months) |
 | Sales anomalies (robust z-score) | Too noisy to give useful alerts | Not used |
+| Market basket (association rules) | Lift about 1 for every pair: no real basket pattern | Not shown; the chatbot suggests matching items instead |
 
-Details are in `docs/machine_learning.md`. The experiment code is kept in `ml/experiments/`.
+Details are in `docs/machine_learning.md`.
+
+---
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | components, schemas, backend modules, technology, run order |
+| [docs/data_pipeline.md](docs/data_pipeline.md) | bronze -> silver -> gold, quality checks, investigations, cleaning decisions |
+| [docs/data_model.md](docs/data_model.md) | every gold and app table and calculated column |
+| [docs/dashboards.md](docs/dashboards.md) | the YAML app engine, the 16 dashboards and the other pages |
+| [docs/ai_assistants.md](docs/ai_assistants.md) | assistants, tools, offers, AI tools, memory, voice, security |
+| [docs/machine_learning.md](docs/machine_learning.md) | forecast method and evaluation, experiments not used |
+| [docs/data_limitations.md](docs/data_limitations.md) | known limits of the generated data and how they are handled |
 
 ---
 
 ## Not in this repository
 - `data/` – the source CSV files
 - `reports/` – generated profiling, quality and investigation reports
-- `.env` – passwords and the API key
+- `.env` – passwords and API keys
+
+---
+
+## Acknowledgements
+Built as HVIA Task 3. Thank you to HVIA and Ayman for the guidance and support.

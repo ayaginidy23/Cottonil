@@ -34,6 +34,12 @@ from ..llm import chat_completion
 MEMORY_MAX_CHARS = 1200
 _ready = False
 
+
+def _json_value(v):
+    """Decimal -> number (not text), dates -> text, when a chat is saved."""
+    from decimal import Decimal
+    return float(v) if isinstance(v, Decimal) else str(v)
+
 DDL = """
 CREATE SCHEMA IF NOT EXISTS app;
 CREATE TABLE IF NOT EXISTS app.chat_sessions (
@@ -171,7 +177,7 @@ def save_turn(assistant: str, owner: str, session_id: str | None,
                      {"s": sid, "c": user_text})
         conn.execute("""INSERT INTO app.chat_messages (session_id, role, content, payload)
                         VALUES (%(s)s, 'assistant', %(c)s, %(p)s)""",
-                     {"s": sid, "c": reply, "p": json.dumps(payload, ensure_ascii=False, default=str)
+                     {"s": sid, "c": reply, "p": json.dumps(payload, ensure_ascii=False, default=_json_value)
                       if payload else None})
         conn.execute("UPDATE app.chat_sessions SET updated_at = now() WHERE session_id = %(s)s", {"s": sid})
     return sid

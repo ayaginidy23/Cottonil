@@ -32,6 +32,20 @@ accessories come in one free size. Kids items use age sizes 2, 3, 4, 5, 6 and 7 
 If you are between two sizes, pick the bigger one for a relaxed fit, especially for
 cotton items which can shrink slightly after the first wash.
 
+## Size advice
+The assistant can suggest a size from your height and weight (or waist), or from the child's age for
+kids items, using a general size chart. Fits differ between products, so the product page and the
+exchange policy apply: an exchange for a different size is free.
+
+## Wholesale price quotes
+Resellers and companies can ask the assistant for a price quote for many units. The quote uses the list
+prices with a volume discount (demo tiers: 24+ units 5%, 100+ units 10%, 300+ units 15%) and can be
+downloaded as a PDF. Final prices are confirmed by the wholesale team.
+
+## Ordering in the chat
+The assistant can add products to a cart. The order is sent to the shop on WhatsApp with the "WhatsApp
+order" button; payment is cash on delivery or as agreed with the shop.
+
 ## Product care
 Cotton items: wash at 30-40 C with similar colours, do not bleach, tumble dry low or
 dry in the shade, iron at medium temperature. Wash new dark items separately the first

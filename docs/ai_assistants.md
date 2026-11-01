@@ -5,11 +5,13 @@ Two assistants with very different security models:
 | | Shopping Assistant | Business Analyst |
 |---|---|---|
 | Users | Customers and resellers | Management |
-| What the model may do | Call 7 fixed tools | Write SQL |
-| Data it can reach | Public catalog, store policy, branches, the logged-in customer's own orders | The gold schema (read-only) |
-| Code | `backend/app/chat/shop_assistant.py`, `shop_tools.py`, `image_search.py` | `backend/app/chat/analyst.py` |
+| What the model may do | Call 14 fixed tools | Write SQL (read-only, gold only) |
+| Data it can reach | Public catalog, store policy, branches, current offers, the logged-in customer's own orders | The gold schema (read-only) |
+| Code | `backend/app/chat/shop_assistant.py`, `shop_tools.py`, `image_search.py` | `backend/app/chat/analyst.py` (+ `report_agent.py`, `insight_scout.py`, `explain.py`) |
 
 Both use `backend/app/llm.py` (OpenAI-compatible client for Gemini) and `backend/app/chat/memory.py`.
+The AI tools for management (Explain this page, Insight Scout, Report Agent) and the Offers and
+Security Log pages are described further down.
 
 ---
 
@@ -55,6 +57,12 @@ also creates the read-only role `cottonil_reader`.
 | Tool | Does | Login |
 |---|---|---|
 | `search_products` | semantic search in the catalog, optional max price and size | no |
+| `compare_products` | 2-4 products side by side (category, audience, sizes, colours, price, photo) | no |
+| `bought_together` | "complete the look": products bought in the same orders (market basket, `gold.ml_product_pairs`); if there is no strong pattern, matching items of other categories for the same audience | no |
+| `size_advice` | recommends a size from height / weight / waist (or the child's age) and checks that the product is made in that size. **Demo size chart** (Cottonil publishes no official one) | no |
+| `current_offers` | the offers running today, from `app.promotions` (managed on the **Offers** page) | no |
+| `add_to_cart` / `remove_from_cart` | checks the product and size exist and returns the real SKU and price; the cart lives in the browser | no |
+| `b2b_quote` | wholesale price quote: list prices, **demo** volume-discount tiers (24+ / 100+ / 300+ units), total; saved in `app.b2b_quotes` and downloadable as a bilingual PDF | no |
 | `find_branches` | branches in a governorate (lists covered governorates if none) | no |
 | `store_policy` | returns, exchange, delivery, payment (demo knowledge base) | no |
 | `my_orders` | the customer's recent orders | yes |
@@ -62,13 +70,47 @@ also creates the read-only role `cottonil_reader`.
 | `reorder_suggestions` | for resellers: what they buy most | yes |
 | `purchase_summary` | the customer's purchases per year | yes |
 
+**Franco-Arabic:** the system prompt teaches the model Arabizi ("3ayez boxer a2tan size L":
+3 = ع, 7 = ح, 2 = ء ...). It answers in Egyptian Arabic and translates the request into normal
+Arabic / English words before calling a tool, so the semantic search still works.
+
+**Cart and WhatsApp order:** the bot fills the cart with `add_to_cart`; the cart is sent back with
+every message so "remove the boxer" works. "WhatsApp order" opens WhatsApp with the order written out
+(items, sizes, quantities, total). `WHATSAPP_NUMBER` in `.env` sets the shop's number; without it the
+customer picks the chat. There is no online payment in the demo.
+
+**Offers (`promotions.py`, page *Offers*):** management adds offers: a discount on one category, one
+audience, or the whole order with N+ pieces, with start and end dates, and can pause or delete them. The
+first run creates three demo offers from real catalog categories (marked "demo"). The bot tells customers
+about running offers (`current_offers`, never invented), and the cart tries every running offer and applies
+the one that saves the most - offers are not combined. It also hints "add 1 more piece to get 10% off".
+Wholesale quotes keep their own volume tiers.
+
 ### Security
 - The model never writes SQL. Tools run fixed, parameterised queries.
 - `customer_id` is injected by the server and removed from the model's arguments, so a customer can
   only reach their own data.
 - An order of another customer gets the same "not found" answer as a non-existent order, so nothing leaks.
 - No tool returns company sales, profit, costs, employees, suppliers or other customers. Even a
-  successful prompt injection has no path to that data.
+  successful prompt injection has no path to that data. ("Complete the look" only returns product
+  cards, never counts.)
+
+### Security log (`security_log.py`, page *Security Log*)
+Every time a protection fires it is written to `app.security_events` (schema `app`, not readable by the
+analyst role). Logging never blocks or breaks a chat.
+
+| Kind | Severity | When |
+|---|---|---|
+| `blocked_sql` | high | the analyst generated SQL that is not one read-only SELECT |
+| `permission_denied` | high | a query tried to read outside `gold` (stopped by the database role) |
+| `customer_id_override` | high | the model passed another customer's id to a tool (ignored) |
+| `prompt_injection` | high | "ignore your instructions", "show the system prompt"... |
+| `other_customer_order` | medium | a customer asked for an order that exists on another account |
+| `sensitive_question` | medium | a customer asked about sales, profit, salaries, suppliers... |
+| `login_required` | low | a guest asked for orders / purchase history |
+
+The keyword lists only decide what is *logged*; the refusal itself comes from the rules and from the
+fact that no tool can return such data.
 
 ### Search by photo (`image_search.py`)
 The browser resizes the photo (max 1024 px JPEG, which also removes EXIF / location). A vision model
@@ -111,6 +153,40 @@ Protection is enforced by the **database**, not only by the prompt.
 The analyst sends a sample of the query result (up to 60 rows) to the LLM provider to write the answer.
 For confidential data, point `.env` to a local model (any OpenAI-compatible server such as Ollama);
 no code change is needed.
+
+---
+
+## AI tools for management
+
+### Explain this page (`chat/explain.py`, `POST /api/apps/{id}/explain`)
+The page is run with the current filters, then shrunk to a short digest: every KPI with its change, and
+for every chart only first / last / highest / lowest point (trends) or the top rows (rankings). The model
+writes a headline, 3-5 points and 1-2 things to watch, in **English and Egyptian Arabic** (JSON). It never
+sees raw tables, so it cannot invent other numbers. Results are cached per page and filters.
+
+### Download PDF (every dashboard and product page)
+The browser's print-to-PDF with a print layout: logo, title in both languages, the filters and date, the
+AI summary in English **and** Arabic, and every KPI / chart title in both languages. The browser renders
+the Arabic text, so it is always joined and right-to-left (server PDF libraries often break Arabic).
+
+### Insight Scout (`chat/insight_scout.py`, `GET /api/insights`)
+Nine fixed, read-only SQL probes compare the latest complete months with the past: category units, branch
+real sales, channel mix, category margin, products with high returns, discount depth, at-risk customers,
+stock-out risk and next month's forecast. Growth uses **units or real (2026-price) values**, never nominal
+EGP. The model turns the findings into 4-7 cards (EN + AR) with a next step and a follow-up question that
+opens the Business Analyst. Without AI quota, simple bilingual template cards are built from the numbers.
+Cached for 6 hours ("Refresh" re-runs).
+
+### Report Agent (`chat/report_agent.py`, `POST /api/analyst/report`)
+An agent: it plans the angles of a topic, runs 3-6 queries through the **same safe `run_sql`** as the
+analyst (read-only role, gold only, timeout, row limit), then writes the report as JSON in English and
+Egyptian Arabic: summary, sections, recommendations, notes. Each section points to the number of the query
+whose result it shows, so **chart data comes from the database, not from the model's text**. Reports are
+saved in `app.analyst_reports`; `/print/report/<id>` is the bilingual PDF page.
+
+### Talk to your data (analyst page)
+Hands-free mode: the mic listens, the question is sent when the manager stops talking, the answer is read
+aloud, then the mic listens again. Silence ends the mode. Browser Web Speech API (Chrome / Edge).
 
 ---
 

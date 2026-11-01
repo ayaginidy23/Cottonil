@@ -151,13 +151,17 @@ charts:
 
   - id: sales_by_governorate
     title: Net sales by governorate
-    type: bar
+    type: map
     width: full
     format: egp
     x: label
-    series: [{key: value, label: Net sales}]
+    note: Bubble size = net sales of the branches in each governorate. Hover a bubble for the numbers; the table view lists every governorate.
+    series:
+      - {key: value, label: Net sales}
+      - {key: branches, label: Branches, format: number}
     sql: |
-      SELECT b.governorate_ar AS label, SUM(f.net_sales_after_returns_egp) AS value
+      SELECT b.governorate_ar AS label, SUM(f.net_sales_after_returns_egp) AS value,
+             COUNT(DISTINCT b.branch_id) AS branches
       FROM gold.fact_orders f
       JOIN gold.dim_branch b ON b.branch_id = f.branch_id
       WHERE {where}

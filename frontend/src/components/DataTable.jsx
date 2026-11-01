@@ -7,6 +7,7 @@
 import { useMemo, useState } from 'react'
 import { Download } from 'lucide-react'
 import { fmt, fmtAxisLabel } from '../lib/format.js'
+import { useLang } from '../lib/i18n.jsx'
 
 // Quote a value for CSV: wrap in "..." and double any inner quotes
 const csvCell = (v) => {
@@ -32,6 +33,7 @@ function downloadCsv(rows, columns, filename) {
 
 export default function DataTable({ rows, columns, filename = 'cottonil_export' }) {
   const [sort, setSort] = useState({ key: null, dir: 'desc' })
+  const { tl } = useLang()
 
   const sorted = useMemo(() => {
     if (!sort.key) return rows
@@ -76,7 +78,7 @@ export default function DataTable({ rows, columns, filename = 'cottonil_export' 
             <tr key={i}>
               {columns.map((c) => (
                 <td key={c.key} className={c.format ? 'num' : ''} dir="auto">
-                  {c.format ? fmt(r[c.key], c.format, { compact: false }) : fmtAxisLabel(r[c.key])}
+                  {c.format ? fmt(r[c.key], c.format, { compact: false }) : tl(fmtAxisLabel(r[c.key]))}
                 </td>
               ))}
             </tr>

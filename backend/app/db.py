@@ -14,7 +14,7 @@ from .config import settings
 pool = ConnectionPool(
     conninfo=settings.dsn,
     min_size=1,
-    max_size=10,
+    max_size=16,                        # dashboard queries run in parallel (engine.py)
     kwargs={"row_factory": dict_row},   # every row comes back as a dict: {"column": value}
     open=False,                         # opened when the app starts (see main.py)
 )

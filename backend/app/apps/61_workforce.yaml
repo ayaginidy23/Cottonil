@@ -1,0 +1,121 @@
+id: workforce
+title: Workforce Productivity & Store Operations
+group: Operations
+order: 61
+icon: user-cog
+description: Headcount, labour cost and sales per employee - which branches turn payroll into sales most efficiently.
+
+columns:
+  month: pr.month_start
+  branch: pr.branch_id
+
+kpis:
+  - id: headcount
+    label: Employees paid
+    format: number
+    sql: |
+      SELECT COUNT(DISTINCT pr.employee_id) AS value FROM gold.fact_payroll pr WHERE {where}
+  - id: labour_cost
+    label: Labour cost
+    format: egp
+    good: down
+    sql: |
+      SELECT SUM(pr.gross_pay_egp) AS value FROM gold.fact_payroll pr WHERE {where}
+  - id: avg_pay
+    label: Avg monthly pay per employee
+    format: egp
+    sql: |
+      SELECT AVG(pr.gross_pay_egp) AS value FROM gold.fact_payroll pr WHERE {where}
+  - id: overtime_share
+    label: Overtime share of pay
+    format: pct
+    good: down
+    sql: |
+      SELECT SUM(pr.overtime_egp) / NULLIF(SUM(pr.gross_pay_egp), 0) AS value FROM gold.fact_payroll pr WHERE {where}
+  - id: sales_per_employee
+    label: Monthly sales per employee
+    format: egp
+    columns: {month: p.month_start, branch: p.branch_id}
+    sql: |
+      SELECT SUM(p.net_sales_after_returns_egp) / NULLIF(SUM(p.paid_employees), 0) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+  - id: payroll_pct
+    label: Payroll as % of sales
+    format: pct
+    good: down
+    columns: {month: p.month_start, branch: p.branch_id}
+    sql: |
+      SELECT SUM(p.payroll_egp) / NULLIF(SUM(p.net_sales_after_returns_egp), 0) AS value
+      FROM gold.mart_branch_pnl_monthly p WHERE {where}
+
+charts:
+  - id: by_position
+    title: Employees by position
+    type: donut
+    width: third
+    format: number
+    x: label
+    series: [{key: value, label: Employees}]
+    sql: |
+      SELECT pr.position_en AS label, COUNT(DISTINCT pr.employee_id) AS value
+      FROM gold.fact_payroll pr WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: pay_by_position
+    title: Avg monthly pay by position
+    type: bar
+    width: third
+    format: egp
+    x: label
+    series: [{key: value, label: Avg pay}]
+    sql: |
+      SELECT pr.position_en AS label, AVG(pr.gross_pay_egp) AS value
+      FROM gold.fact_payroll pr WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: pay_mix
+    title: Pay mix by position
+    type: bar
+    width: third
+    format: egp
+    x: label
+    series:
+      - {key: base, label: Base}
+      - {key: overtime, label: Overtime}
+      - {key: bonus, label: Bonus}
+    sql: |
+      SELECT pr.position_en AS label, AVG(pr.base_salary_egp) AS base,
+             AVG(pr.overtime_egp) AS overtime, AVG(pr.bonus_egp) AS bonus
+      FROM gold.fact_payroll pr WHERE {where} GROUP BY 1 ORDER BY 2 DESC
+
+  - id: monthly_cost
+    title: Monthly labour cost
+    type: area
+    width: full
+    format: egp
+    x: month
+    series: [{key: cost, label: Labour cost}]
+    sql: |
+      SELECT pr.month_start AS month, SUM(pr.gross_pay_egp) AS cost
+      FROM gold.fact_payroll pr WHERE {where} GROUP BY 1 ORDER BY 1
+
+  - id: productivity_table
+    title: Branch productivity
+    type: table
+    width: full
+    columns: {month: p.month_start, branch: p.branch_id}
+    table_columns:
+      - {key: branch, label: Branch}
+      - {key: type, label: Type}
+      - {key: employees, label: Avg employees, format: decimal}
+      - {key: net_sales, label: Net sales, format: egp}
+      - {key: sales_per_employee, label: Sales / employee-month, format: egp}
+      - {key: payroll, label: Payroll, format: egp}
+      - {key: payroll_pct, label: Payroll % of sales, format: pct}
+    sql: |
+      SELECT b.branch_display_name AS branch, b.retail_location_type AS type,
+             AVG(p.paid_employees) AS employees,
+             SUM(p.net_sales_after_returns_egp) AS net_sales,
+             SUM(p.net_sales_after_returns_egp) / NULLIF(SUM(p.paid_employees), 0) AS sales_per_employee,
+             SUM(p.payroll_egp) AS payroll,
+             SUM(p.payroll_egp) / NULLIF(SUM(p.net_sales_after_returns_egp), 0) AS payroll_pct
+      FROM gold.mart_branch_pnl_monthly p JOIN gold.dim_branch b ON b.branch_id = p.branch_id
+      WHERE {where} GROUP BY 1, 2 ORDER BY sales_per_employee DESC NULLS LAST

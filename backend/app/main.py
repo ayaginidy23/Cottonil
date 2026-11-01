@@ -14,13 +14,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .db import pool
 from .registry import reload_apps
-from .routers import apps, chat, meta
+from .routers import ai_tools, apps, chat, meta, products
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # --- runs once when the server starts ---
-    pool.open(wait=True)        # connect to Postgres
+    try:
+        pool.open(wait=True, timeout=15)        # connect to Postgres
+    except Exception:
+        # the usual reason: Docker Desktop or the database container is not running
+        print("\n" + "=" * 70)
+        print(f"Cannot connect to PostgreSQL at {settings.db_host}:{settings.db_port} "
+              f"(database '{settings.db_name}').")
+        print("Check: 1) Docker Desktop is open  2) the Postgres container is Running")
+        print("       3) POSTGRES_HOST / POSTGRES_PORT / POSTGRES_PASSWORD in .env are right")
+        print("=" * 70 + "\n")
+        raise
     reload_apps()               # read app/apps/*.yaml
     yield
     # --- runs once when the server stops ---
@@ -46,3 +56,5 @@ app.add_middleware(
 app.include_router(meta.router)
 app.include_router(apps.router)
 app.include_router(chat.router)
+app.include_router(ai_tools.router)
+app.include_router(products.router)

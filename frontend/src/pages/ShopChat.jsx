@@ -5,9 +5,15 @@
 // can answer about THAT customer's orders only. Product suggestions come back
 // as cards with a link to the real product page.
 // Extras: voice notes (mic), read replies aloud, and photo -> similar products.
+// Shopping: size advice, compare table, "complete the look", a cart that the
+// bot fills (add_to_cart) and that is sent as an order on WhatsApp, and B2B
+// price quotes with a bilingual PDF. The bot understands Franco-Arabic too.
 // =============================================================================
 import { useEffect, useRef, useState } from 'react'
 import { Bot, ImagePlus, Send, ShieldCheck, User, Wrench } from 'lucide-react'
+import CartPanel, { applyCartActions, loadCart, saveCart } from '../components/CartPanel.jsx'
+import CompareTable from '../components/CompareTable.jsx'
+import QuoteCard from '../components/QuoteCard.jsx'
 import MemoryPanel from '../components/MemoryPanel.jsx'
 import { MicButton, SpeakButton } from '../components/VoiceControls.jsx'
 import { api } from '../lib/api.js'
@@ -18,12 +24,16 @@ import { stopSpeaking } from '../lib/speech.js'
 const SUGGESTIONS = {
   guest: [
     'عايز تيشيرت قطن رجالي خفيف للصيف',
-    'بيجامة أطفال مقاس 4 تحت 400 جنيه',
+    '3ayez pyjama bananty a2tan size XL ta7t 1300 geneh',
+    'طولي 178 ووزني 85، ألبس مقاس إيه؟',
+    'في عروض إيه دلوقتي؟',
     'أقرب فرع في الإسكندرية؟',
     'What is your return policy?',
   ],
-  customer: ['آخر أوردرات ليا إيه؟', 'أوردري الأخير وصل ولا لسه؟', 'اقترحلي حاجات زي اللي بشتريها'],
-  reseller: ['إيه أكتر المنتجات اللي بطلبها؟ واقترحلي reorder', 'إجمالي مشترياتي كل سنة', 'إيه طرق الدفع للتجار؟'],
+  customer: ['آخر أوردرات ليا إيه؟', 'أوردري الأخير وصل ولا لسه؟', 'اقترحلي حاجات زي اللي بشتريها',
+    'في عروض إيه دلوقتي؟'],
+  reseller: ['إيه أكتر المنتجات اللي بطلبها؟ واقترحلي reorder', 'عايز عرض سعر لـ 150 بوكسر و 100 فانلة',
+    'إجمالي مشترياتي كل سنة', 'إيه طرق الدفع للتجار؟'],
 }
 
 function ProductCard({ p }) {
@@ -54,12 +64,17 @@ export default function ShopChat() {
   const [sessionId, setSessionId] = useState(null)   // the saved chat on the server
   const [memory, setMemory] = useState('')           // long-term memory of this user
   const [saving, setSaving] = useState(false)
+  const [cart, setCart] = useState(() => loadCart(''))
   const endRef = useRef(null)
   const fileRef = useRef(null)
 
   useEffect(() => {
     api.demoUsers().then(setUsers).catch(() => setUsers([]))
   }, [])
+
+  // every account has its own cart (kept in this browser)
+  useEffect(() => { setCart(loadCart(customerId)) }, [customerId])
+  const updateCart = (next) => { setCart(next); saveCart(customerId, next) }
 
   // load this account's open chat + memory (on page load and when switching account)
   useEffect(() => {
@@ -75,6 +90,7 @@ export default function ShopChat() {
           setSessionId(res.session.session_id)
           setMessages(res.session.messages.map((m) => ({
             role: m.role, content: m.content, products: m.payload?.products, tools: m.payload?.tools,
+            compare: m.payload?.compare, quote: m.payload?.quote,
           })))
         }
       })
@@ -164,9 +180,14 @@ export default function ShopChat() {
         customerId || null,
         next.map(({ role, content: c }) => ({ role, content: c })),
         sessionId,
+        cart.map(({ product_id, name, size, quantity, unit_price }) => ({ product_id, name, size, quantity, unit_price })),
       )
       setSessionId(res.session_id || sessionId)
-      setMessages([...next, { role: 'assistant', content: res.reply, products: res.products, tools: res.tools }])
+      if (res.cart_actions?.length) updateCart(applyCartActions(cart, res.cart_actions))
+      setMessages([...next, {
+        role: 'assistant', content: res.reply, products: res.compare ? [] : res.products, tools: res.tools,
+        compare: res.compare, quote: res.quote, cartAdded: res.cart_actions?.length || 0,
+      }])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -182,7 +203,9 @@ export default function ShopChat() {
           <h1>Cottonil Shopping Assistant</h1>
           <p className="muted">
             Chatbot for customers and resellers: product search by meaning (RAG + pgvector on the real
-            catalog), branches, store policy, and - when logged in - their own orders and reorders.
+            catalog), photo search, size advice, compare, complete-the-look, a cart sent as a WhatsApp
+            order, wholesale quotes (PDF), and - when logged in - their own orders and reorders.
+            Understands Arabic, English and Franco-Arabic.
           </p>
         </div>
       </div>
@@ -199,6 +222,7 @@ export default function ShopChat() {
             ))}
           </select>
           <MemoryPanel memory={memory} onNewChat={newChat} onForget={forget} busy={busy} saving={saving} />
+          <CartPanel cart={cart} onChange={updateCart} customer={current} />
           <div className="side-note">
             <ShieldCheck size={16} />
             <span>The bot can only read this account's own orders. Company figures are never exposed.</span>
@@ -228,6 +252,9 @@ export default function ShopChat() {
                   {m.image && <img className="msg-image" src={m.image} alt="Uploaded product photo" />}
                   <div className="msg-text" dir="auto">{m.content}</div>
                   {m.role === 'assistant' && <SpeakButton text={m.content} />}
+                  {m.compare?.length > 0 && <CompareTable products={m.compare} />}
+                  {m.quote && <QuoteCard quote={m.quote} />}
+                  {m.cartAdded > 0 && <div className="cart-note">🛒 Added to your cart · اتضاف للسلة</div>}
                   {m.products?.length > 0 && (
                     <div className="product-grid">
                       {m.products.map((p) => <ProductCard key={p.product_id} p={p} />)}

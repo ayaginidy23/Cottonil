@@ -11,9 +11,19 @@
 # For each chart: run its SQL and return the rows as-is (the frontend draws them).
 # One broken query returns an "error" field instead of breaking the whole page.
 # Results are cached in memory: the data only changes when the pipeline re-runs.
+#
+# Speed:
+#   - the KPIs and charts of a page run IN PARALLEL (several database connections
+#     at once) instead of one after the other, so a page takes about as long as its
+#     slowest query, not the sum of all of them
+#   - if the same page + filters is already being calculated (two quick clicks,
+#     two browser tabs), the second request waits for the first one's result
+#     instead of running every query again
 # =============================================================================
 
+import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 from .db import fetch_all
 from .filters import Filters, build_where, previous_period
@@ -21,6 +31,9 @@ from .filters import Filters, build_where, previous_period
 _CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
 _CACHE_SIZE = 300
 _DATA_START = None
+_WORKERS = ThreadPoolExecutor(max_workers=8)       # parallel queries (db pool has 16 connections)
+_IN_PROGRESS: dict[tuple, threading.Lock] = {}
+_GUARD = threading.Lock()
 
 
 def _data_start():
@@ -89,14 +102,29 @@ def run_app(app: dict, f: Filters) -> dict:
         _CACHE.move_to_end(key)                       # mark as recently used
         return _CACHE[key]
 
+    with _GUARD:                                      # one lock per page + filters
+        lock = _IN_PROGRESS.setdefault(key, threading.Lock())
+    with lock:
+        if key in _CACHE:                             # another request just finished it
+            return _CACHE[key]
+        try:
+            return _calculate(app, f, key)
+        finally:
+            with _GUARD:
+                _IN_PROGRESS.pop(key, None)
+
+
+def _calculate(app: dict, f: Filters, key: tuple) -> dict:
+    kpi_jobs = [_WORKERS.submit(_run_kpi, k, app, f) for k in app["kpis"]]
+    chart_jobs = [_WORKERS.submit(_run_chart, c, app, f) for c in app["charts"]]
     result = {
         "id": app["id"],
         "title": app["title"],
         "group": app["group"],
         "description": app["description"],
         "insights": app.get("insights", []),
-        "kpis": [_run_kpi(k, app, f) for k in app["kpis"]],
-        "charts": [_run_chart(c, app, f) for c in app["charts"]],
+        "kpis": [j.result() for j in kpi_jobs],       # same order as in the YAML
+        "charts": [j.result() for j in chart_jobs],
     }
 
     has_error = any("error" in x for x in result["kpis"] + result["charts"])

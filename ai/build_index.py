@@ -32,15 +32,17 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError
+from openai import APIStatusError, OpenAI, RateLimitError
 
 ROOT = Path(__file__).resolve().parent.parent
 KB_DIR = Path(__file__).resolve().parent / "knowledge"
 load_dotenv(ROOT / ".env")
 
-client = OpenAI(api_key=os.getenv("LLM_API_KEY"),
-                base_url=os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
-                timeout=60, max_retries=2)
+# LLM_API_KEY may hold several keys separated by commas (key1,key2) - same as the backend.
+# Each key gets its own client; a bad key is skipped and a rate-limited key hands over to the next.
+API_KEYS = [k.strip() for k in os.getenv("LLM_API_KEY", "").split(",") if k.strip()]
+BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+clients = [OpenAI(api_key=k, base_url=BASE_URL, timeout=60, max_retries=2) for k in API_KEYS]
 EMBED_MODEL = os.getenv("LLM_EMBED_MODEL", "gemini-embedding-001")
 
 
@@ -55,14 +57,29 @@ def embed(texts):
     out = []
     for i in range(0, len(texts), BATCH):
         chunk = texts[i:i + BATCH]
+        r = None
         for attempt in range(6):
-            try:
-                r = client.embeddings.create(model=EMBED_MODEL, input=chunk)
+            for n, c in enumerate(clients, start=1):
+                if c is None:
+                    continue
+                try:
+                    r = c.embeddings.create(model=EMBED_MODEL, input=chunk)
+                    break
+                except RateLimitError:
+                    continue                                   # try the next key
+                except APIStatusError as e:
+                    if e.status_code in (400, 401, 403) and "key" in str(e).lower():
+                        print(f"   key {n} is not valid - skipping it")
+                        clients[n - 1] = None                  # never try this key again
+                        continue
+                    raise
+            if r is not None:
                 break
-            except RateLimitError:
-                wait = 30 + 10 * attempt
-                print(f"   rate limit reached - waiting {wait}s and retrying...")
-                time.sleep(wait)
+            if not any(clients):
+                sys.exit("No valid API key in LLM_API_KEY. Check the keys in .env (run ai/check_llm.py).")
+            wait = 30 + 10 * attempt
+            print(f"   rate limit reached - waiting {wait}s and retrying...")
+            time.sleep(wait)
         else:
             sys.exit("Still rate-limited after several retries - try again in a few minutes.")
         out.extend(d.embedding for d in r.data)

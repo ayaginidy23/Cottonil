@@ -18,12 +18,14 @@
 
 import json
 import re
+from decimal import Decimal
 
 from ..db import fetch_all, fetch_one, pool
 from ..llm import chat_completion, embed, to_pgvector
+from ..security_log import log_event
 from .memory import memory_prompt
 
-MAX_STEPS = 6
+MAX_STEPS = 8
 MAX_ROWS = 200
 READER_ROLE = "cottonil_reader"
 
@@ -57,6 +59,8 @@ Managers ask business questions; you answer from the company data using PostgreS
 
 How to work:
 1. Write ONE PostgreSQL SELECT (or WITH ... SELECT) over the gold schema and call run_sql.
+   For a question with several parts, prefer one query with CTEs/joins that returns all the
+   parts together; use at most 3 queries in total, then answer.
    Always use schema-qualified names like gold.fact_orders. Aggregate in SQL; never select
    raw rows without a LIMIT. Round money to 0 decimals and ratios to 3.
 2. If the query fails, read the error, fix it and call run_sql again.
@@ -64,9 +68,12 @@ How to work:
    then 2-4 short bullet insights, then any assumption you made.
 Reply in the user's language (Egyptian Arabic if they write Arabic). Never invent numbers.
 For a chart-friendly result, return a label/date column first and 1-3 numeric columns.
-Product photos: the app shows a photo for every row that has a product_id column. So when the
-user asks to SEE products / photos / pictures, include p.product_id (from gold.dim_product) in
-the SELECT and say "the photos are shown below". Never say photos are unavailable.
+Product photos: the app shows product photos when the user asks to SEE products / photos /
+pictures, or when the result is a short list of products. In that case include p.product_id
+(from gold.dim_product) in the SELECT and say "the photos are shown below".
+Comparisons: when the user asks to compare specific products, branches or categories, return ONLY
+those items (one row each) side by side with the metrics asked for. If they say "compare two"
+without saying which ones, ask which ones instead of listing everything.
 """
 
 RUN_SQL_SPEC = [{
@@ -137,9 +144,10 @@ def _check_sql(query: str) -> str | None:
     return None
 
 
-def run_sql(query: str) -> dict:
+def run_sql(query: str, owner: str | None = None) -> dict:
     problem = _check_sql(query)
     if problem:
+        log_event("analyst", "blocked_sql", "query not run", owner, reason=problem, query=query[:300])
         return {"error": problem}
     q = query.strip().rstrip(";")
     try:
@@ -158,15 +166,32 @@ def run_sql(query: str) -> dict:
                 cols = [d.name for d in cur.description] if cur.description else []
                 rows = cur.fetchmany(MAX_ROWS + 1)
         truncated = len(rows) > MAX_ROWS
-        return {"columns": cols, "rows": rows[:MAX_ROWS], "row_count": min(len(rows), MAX_ROWS),
+        # NUMERIC columns arrive as Decimal; as JSON they would become text like
+        # "10717782.0666666666666660" (and break the chart), so make them normal numbers
+        rows = [{k: (round(float(v), 4) if isinstance(v, Decimal) else v) for k, v in r.items()}
+                for r in rows[:MAX_ROWS]]
+        return {"columns": cols, "rows": rows, "row_count": min(len(rows), MAX_ROWS),
                 "truncated": truncated}
     except Exception as e:
-        return {"error": str(e).split("\n")[0][:400]}
+        message = str(e).split("\n")[0][:400]
+        if "permission denied" in message.lower():
+            log_event("analyst", "permission_denied", "blocked by the read-only role (gold only)", owner,
+                      error=message, query=q[:300])
+        return {"error": message}
 
 
 # ---------------------------------------------------------------------------
 # Agent loop
 # ---------------------------------------------------------------------------
+PHOTO_WORDS = re.compile(r"(photo|picture|image|show me|صور|صورة|وريني|اعرض|شكل)", re.IGNORECASE)
+SHORT_LIST = 6          # a result with this many products or fewer gets photos automatically
+
+
+def _photos_wanted(question: str, rows: list[dict]) -> bool:
+    """Photos only when asked for, or for a short list - not one photo per row of a big table."""
+    return bool(PHOTO_WORDS.search(question or "")) or len(rows) <= SHORT_LIST
+
+
 def _product_images(columns: list[str], rows: list[dict], limit: int = 12) -> list[dict]:
     """If the result has product_id, attach the product photos (from ai.product_images).
     Done by the server, not by the model's SQL: the read-only role only sees gold."""
@@ -177,16 +202,17 @@ def _product_images(columns: list[str], rows: list[dict], limit: int = 12) -> li
             return []
         ids = list(dict.fromkeys(str(r["product_id"]) for r in rows if r.get("product_id")))[:limit]
         found = {r["product_id"]: r for r in fetch_all("""
-            SELECT i.product_id, i.image_url, MIN(p.product_name_ar) AS name, MIN(p.source_url) AS url
+            SELECT i.product_id, i.image_url, MIN(p.product_name_ar) AS name,
+                   COALESCE(MAX(i.product_url), MIN(p.source_url)) AS url
             FROM ai.product_images i JOIN gold.dim_product p ON p.product_id = i.product_id
-            WHERE i.product_id = ANY(%(ids)s) GROUP BY i.product_id, i.image_url
+            WHERE i.product_id = ANY(%(ids)s) AND i.image_url IS NOT NULL GROUP BY i.product_id, i.image_url
         """, {"ids": ids})}
         return [found[i] for i in ids if i in found]          # keep the result's order
     except Exception:
         return []                                             # photos are a bonus, never an error
 
 
-def chat(messages: list[dict], memory: str = "") -> dict:
+def chat(messages: list[dict], memory: str = "", owner: str | None = None) -> dict:
     question = messages[-1]["content"]
     docs = _all_table_docs()
     tables = _relevant_tables(question, docs)
@@ -214,7 +240,8 @@ def chat(messages: list[dict], memory: str = "") -> dict:
                 "rows": last_ok["rows"] if last_ok else [],
                 "tables_used": tables,
                 "attempts": queries,
-                "images": _product_images(last_ok["columns"], last_ok["rows"]) if last_ok else [],
+                "images": _product_images(last_ok["columns"], last_ok["rows"])
+                if last_ok and _photos_wanted(question, last_ok["rows"]) else [],
             }
         convo.append({
             "role": "assistant", "content": msg.content or "",
@@ -228,7 +255,7 @@ def chat(messages: list[dict], memory: str = "") -> dict:
                 query = json.loads(tc.function.arguments or "{}").get("query", "")
             except json.JSONDecodeError:
                 query = ""
-            result = run_sql(query)
+            result = run_sql(query, owner)
             queries.append({"sql": query, "ok": "error" not in result,
                             "error": result.get("error")})
             if "error" not in result:
@@ -240,7 +267,20 @@ def chat(messages: list[dict], memory: str = "") -> dict:
             convo.append({"role": "tool", "tool_call_id": tc.id,
                           "content": json.dumps(shown, ensure_ascii=False, default=str)})
 
-    return {"reply": "I could not finish this analysis - please rephrase or narrow the question.",
+    # Out of steps: instead of giving up, ask the model to answer NOW with the results it
+    # already has (tool_choice="none" = it may not call run_sql again).
+    reply = None
+    if last_ok:
+        try:
+            convo.append({"role": "user", "content": "Stop querying. Answer the question now using only the "
+                          "query results above; say clearly which part could not be answered."})
+            resp = chat_completion(messages=convo, tools=RUN_SQL_SPEC, tool_choice="none", temperature=0.1)
+            reply = resp.choices[0].message.content
+        except Exception:
+            reply = None
+    return {"reply": reply or "I could not finish this analysis - please rephrase or narrow the question.",
             "sql": last_ok["sql"] if last_ok else None,
             "columns": last_ok["columns"] if last_ok else [], "rows": last_ok["rows"] if last_ok else [],
-            "tables_used": tables, "attempts": queries}
+            "tables_used": tables, "attempts": queries,
+            "images": _product_images(last_ok["columns"], last_ok["rows"])
+            if last_ok and _photos_wanted(question, last_ok["rows"]) else []}

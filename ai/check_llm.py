@@ -2,6 +2,7 @@
 # check_llm.py  -  Verify the AI setup BEFORE building anything with it
 # -----------------------------------------------------------------------------
 # Checks, in order:
+#   0. EVERY key in LLM_API_KEY (key1,key2,...) is valid
 #   1. the API key works and which models your key can use
 #   2. the chat model answers
 #   3. the embedding model returns vectors (and their size)
@@ -32,6 +33,23 @@ if not key:
 
 client = OpenAI(api_key=key, base_url=base_url, timeout=45, max_retries=0)   # fail fast
 ok = True
+
+all_keys = [k.strip() for k in os.getenv("LLM_API_KEY", "").split(",") if k.strip()]
+print(f"0) Keys in LLM_API_KEY: {len(all_keys)}")
+for n, k in enumerate(all_keys, start=1):
+    shown = f"{k[:4]}...{k[-4:]}" if len(k) > 10 else "(very short - probably wrong)"
+    try:
+        OpenAI(api_key=k, base_url=base_url, timeout=30, max_retries=0).embeddings.create(
+            model=embed_model, input=["test"])
+        print(f"   key {n} {shown}: OK")
+    except Exception as e:
+        body = str(getattr(e, "body", None) or e)
+        if "429" in body or "quota" in body.lower() or "exhausted" in body.lower():
+            print(f"   key {n} {shown}: valid, but rate-limited right now")
+        else:
+            print(f"   key {n} {shown}: NOT VALID -> {body[:150]}")
+            ok = False
+print()
 
 print("1) Models available to your key (chat / embedding candidates):")
 try:

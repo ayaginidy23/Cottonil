@@ -37,11 +37,18 @@ export function fmt(value, format = 'number', { compact = true, short = false } 
   }
 }
 
-// "2025-03-01" -> "Mar 25" for month axes; anything else unchanged
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// "2025-03-01" -> "Mar 25" (or "مارس 25" in Arabic) for month axes; anything else unchanged
+const MONTHS = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  ar: ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'],
+}
+let monthLang = 'en'
+export function setFormatLang(lang) {        // called by the language switch (i18n.jsx)
+  monthLang = lang === 'ar' ? 'ar' : 'en'
+}
 export function fmtAxisLabel(v) {
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
-    return `${MONTHS[Number(v.slice(5, 7)) - 1]} ${v.slice(2, 4)}`
+    return `${MONTHS[monthLang][Number(v.slice(5, 7)) - 1]} ${v.slice(2, 4)}`
   }
   return v
 }

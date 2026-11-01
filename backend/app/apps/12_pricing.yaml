@@ -95,3 +95,4 @@ charts:
                  s.gross_margin_egp AS m, s.net_sales_egp AS n
           FROM gold.fact_sales_line s WHERE {where}
       ) x GROUP BY bucket ORDER BY bucket
+

@@ -7,14 +7,19 @@
 #   GET  /api/chat/session     -> restore the open chat + the long-term memory
 #   POST /api/chat/new         -> "New chat": fold the chat into memory, start fresh
 #   DELETE /api/chat/memory    -> "Forget me": delete the long-term memory
+#   GET  /api/chat/config      -> WhatsApp number for the cart checkout
+#   GET  /api/chat/offers      -> offers running today (the cart applies them)
+#   GET  /api/chat/quote/{id}  -> a saved B2B quote (for the bilingual PDF page)
 # =============================================================================
 
+import os
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..chat import analyst, image_search, memory, shop_assistant
+from .. import promotions
+from ..chat import analyst, image_search, memory, shop_assistant, shop_tools
 from ..db import fetch_all
 from ..llm import LLMError
 
@@ -53,6 +58,7 @@ class ShopRequest(BaseModel):
     messages: list[Message]
     client_id: str = Field(default="", max_length=64)     # random id of this browser (memory owner)
     session_id: str | None = None
+    cart: list[dict] = Field(default_factory=list, max_length=50)   # the browser's cart
 
 
 @router.get("/demo-users")
@@ -77,10 +83,11 @@ def shop_chat(req: ShopRequest):
     try:
         owner = memory.owner_key("shop", req.client_id, req.customer_id)
         result = shop_assistant.chat([m.model_dump() for m in req.messages], req.customer_id,
-                                     memory.get_memory("shop", owner))
+                                     memory.get_memory("shop", owner), cart=req.cart, owner=owner)
         result["session_id"] = _save(
             "shop", owner, req.session_id, req.messages[-1].content, result["reply"],
-            {"products": result.get("products"), "tools": result.get("tools")})
+            {"products": result.get("products"), "tools": result.get("tools"),
+             "compare": result.get("compare"), "quote": result.get("quote")})
         return result
     except Exception as e:                        # quota, bad key, provider down...
         raise _ai_error(e)
@@ -115,7 +122,7 @@ def analyst_chat(req: AnalystRequest):
         raise HTTPException(400, "The last message must come from the user")
     try:
         owner = memory.owner_key("analyst", req.client_id)
-        result = analyst.chat([m.model_dump() for m in req.messages], memory.get_memory("analyst", owner))
+        result = analyst.chat([m.model_dump() for m in req.messages], memory.get_memory("analyst", owner), owner)
         result["session_id"] = _save(
             "analyst", owner, req.session_id, req.messages[-1].content, result["reply"], {"result": result})
         return result
@@ -153,3 +160,27 @@ def new_chat(req: NewChatRequest):
 def forget(assistant: Assistant, client_id: str = "", customer_id: str | None = None):
     memory.clear_memory(assistant, memory.owner_key(assistant, client_id, customer_id))
     return {"memory": ""}
+
+
+# ---------------------------------------------------------------------------
+# Cart checkout + B2B quotes
+# ---------------------------------------------------------------------------
+@router.get("/config")
+def chat_config():
+    """WHATSAPP_NUMBER in .env (international format, digits only, e.g. 2010xxxxxxx).
+    Empty = WhatsApp opens and the customer chooses who to send the order to."""
+    number = "".join(ch for ch in os.getenv("WHATSAPP_NUMBER", "") if ch.isdigit())
+    return {"whatsapp_number": number}
+
+
+@router.get("/quote/{quote_id}")
+def get_quote(quote_id: str):
+    quote = shop_tools.get_quote(quote_id)
+    if not quote:
+        raise HTTPException(404, "Quote not found")
+    return quote
+
+
+@router.get("/offers")
+def offers_today():
+    return promotions.active_offers()

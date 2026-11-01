@@ -17,29 +17,40 @@ export const canListen = Boolean(Recognition)
 export const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window
 
 // lang: 'ar-EG' (Egyptian Arabic) or 'en-US'
-export function useVoiceInput(onText) {
+// onEnd(text) is called when the user stops talking (used by the analyst's talk mode)
+export function useVoiceInput(onText, onEnd) {
   const [listening, setListening] = useState(false)
   const [voiceError, setVoiceError] = useState(null)
   const recRef = useRef(null)
+  const activeRef = useRef(false)                        // a ref, so callbacks never see an old value
+  const cb = useRef({ onText, onEnd })
+  cb.current = { onText, onEnd }
 
   useEffect(() => () => recRef.current?.abort(), [])     // stop the mic when leaving the page
 
   const start = (lang = 'ar-EG') => {
-    if (!Recognition || listening) return
+    if (!Recognition || activeRef.current) return
     const rec = new Recognition()
+    let heard = ''
     rec.lang = lang
     rec.interimResults = true          // show words while the user is still speaking
     rec.continuous = false             // stop automatically after a pause
     rec.onresult = (e) => {
-      const text = Array.from(e.results).map((r) => r[0].transcript).join(' ')
-      onText(text)
+      heard = Array.from(e.results).map((r) => r[0].transcript).join(' ')
+      cb.current.onText?.(heard)
     }
     rec.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return
       setVoiceError(e.error === 'not-allowed' ? 'Microphone permission was denied.' : `Voice error: ${e.error}`)
     }
-    rec.onend = () => setListening(false)
+    rec.onend = () => {
+      activeRef.current = false
+      setListening(false)
+      cb.current.onEnd?.(heard)
+    }
     recRef.current = rec
     setVoiceError(null)
+    activeRef.current = true
     setListening(true)
     rec.start()
   }
@@ -52,8 +63,9 @@ export function useVoiceInput(onText) {
 const hasArabic = (text) => /[؀-ۿ]/.test(text)
 
 // Read a reply aloud; picks an Arabic or English voice from the text itself.
-export function speak(text) {
-  if (!canSpeak || !text) return
+// onDone runs when the voice has finished (talk mode then listens again).
+export function speak(text, onDone) {
+  if (!canSpeak || !text) { onDone?.(); return }
   window.speechSynthesis.cancel()                         // stop anything already playing
   const clean = text.replace(/[*#`_>|]/g, ' ')            // don't read markdown symbols
   const u = new SpeechSynthesisUtterance(clean)
@@ -61,6 +73,7 @@ export function speak(text) {
   const voice = window.speechSynthesis.getVoices().find((v) => v.lang.startsWith(u.lang.slice(0, 2)))
   if (voice) u.voice = voice
   u.rate = 1
+  if (onDone) { u.onend = onDone; u.onerror = onDone }
   window.speechSynthesis.speak(u)
 }
 
