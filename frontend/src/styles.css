@@ -307,6 +307,34 @@ button { font: inherit; color: inherit; }
 .map-wrap { display: flex; flex-direction: column; gap: 6px; }
 .map { height: 460px; width: 100%; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); z-index: 0; }
 .leaflet-tooltip { font-family: Inter, Cairo, sans-serif; }
+.map-box { position: relative; }
+.map-box .map { background: #0d2a3a; }
+.map-zoom { position: absolute; top: 10px; inset-inline-end: 10px; z-index: 500; display: flex; gap: 6px; }
+.map-zoom .chip { background: rgba(255, 255, 255, 0.92); color: #0b1f45; border-color: transparent; font-weight: 600; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.map-zoom .chip:hover { background: #fff; color: var(--accent-deep); }
+/* governorate names written on the satellite map (white text, dark halo) */
+.leaflet-tooltip.map-label {
+  background: transparent; border: 0; box-shadow: none; padding: 0;
+  color: #fff; font-weight: 700; font-size: 13px; font-family: Cairo, Inter, sans-serif;
+  text-shadow: 0 0 3px #000, 0 0 6px rgba(0, 0, 0, 0.8);
+}
+.leaflet-tooltip.map-label::before { display: none; }
+.leaflet-tooltip.map-label.top { color: #ffd27a; font-size: 14px; }
+/* card that opens when a point is clicked */
+.map-popup .leaflet-popup-content-wrapper { border-radius: 10px; }
+.map-popup .leaflet-popup-content { margin: 10px 14px; min-width: 190px; font-family: Inter, Cairo, sans-serif; color: #0b1f45; }
+.map-pop-title { font-weight: 700; font-size: 15px; margin-bottom: 6px; color: #16408c; }
+.map-pop-row { display: flex; justify-content: space-between; gap: 14px; font-size: 13px; padding: 2px 0; }
+.map-pop-row span { color: #475775; }
+.map-pop-rank { margin-top: 6px; padding-top: 6px; border-top: 1px solid #e1e7f1; font-size: 12px; color: #74819a; }
+
+/* ---- "demo project" notices ---- */
+.demo-badge { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px; flex: none; font-size: 12px; font-weight: 600; color: #8a5a00; background: #fff4dc; border: 1px solid #f2d59a; cursor: help; white-space: nowrap; }
+.demo-note { font-size: 12px; color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .demo-badge { color: #ffd27a; background: rgba(245, 165, 36, 0.12); border-color: rgba(245, 165, 36, 0.4); }
+}
+@media (max-width: 600px) { .demo-badge .demo-long { display: none; } }
 
 /* ---- shopping: cart, compare, quote ---- */
 .cart-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }

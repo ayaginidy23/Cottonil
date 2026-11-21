@@ -10,7 +10,7 @@
 #   format:   egp | number | pct | days | decimal
 #   good:     up (higher is better, default) | down (lower is better)
 #   width:    full | half | third
-#   chart types: line | area | bar | hbar | donut | table
+#   chart types: line | area | bar | hbar | donut | table | map
 # =============================================================================
 id: executive
 title: Executive Dashboard
@@ -155,12 +155,14 @@ charts:
     width: full
     format: egp
     x: label
-    note: Bubble size = net sales of the branches in each governorate. Hover a bubble for the numbers; the table view lists every governorate.
+    note: One point per governorate (orange = highest net sales). Click a point for its numbers; use "Delta & Cairo" to zoom in. The table view lists every governorate.
     series:
       - {key: value, label: Net sales}
+      - {key: orders, label: Orders, format: number}
       - {key: branches, label: Branches, format: number}
     sql: |
       SELECT b.governorate_ar AS label, SUM(f.net_sales_after_returns_egp) AS value,
+             COUNT(*) AS orders,
              COUNT(DISTINCT b.branch_id) AS branches
       FROM gold.fact_orders f
       JOIN gold.dim_branch b ON b.branch_id = f.branch_id

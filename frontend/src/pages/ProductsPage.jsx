@@ -52,6 +52,10 @@ export default function ProductsPage() {
             {ar ? 'كل منتجات الكتالوج بالصور والأسعار وأرقام البيع في الفترة المختارة. اضغط على أي منتج تشوف صفحته.'
               : 'Every catalog product with its photo, price and the sales of the selected period. Click a product to open its page.'}
           </p>
+          <p className="demo-note">
+            {ar ? 'الصور والأسعار من موقع كوتونيل الرسمي العام. ده مشروع تجريبي ومش متجر رسمي.'
+              : 'Photos and prices come from the public cottonilegypt.com site. This is a demo project, not an official store.'}
+          </p>
         </div>
       </div>
 

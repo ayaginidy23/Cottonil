@@ -58,9 +58,15 @@ export default function ProductPage() {
               : `${fmt(info.min_price, 'egp', { compact: false })} – ${fmt(info.max_price, 'egp', { compact: false })}`}
           </div>
           {info.url && (
-            <a className="link-btn no-print" href={info.url} target="_blank" rel="noreferrer">
-              {ar ? 'صفحة المنتج على موقع كوتونيل' : 'Product page on cottonilegypt.com'} <ExternalLink size={13} />
-            </a>
+            <>
+              <a className="link-btn no-print" href={info.url} target="_blank" rel="noreferrer">
+                {ar ? 'المنتج على موقع كوتونيل الرسمي' : 'This product on the official cottonilegypt.com'} <ExternalLink size={13} />
+              </a>
+              <span className="demo-note no-print">
+                {ar ? 'الصورة واللينك من الموقع الرسمي العام. المشروع ده تجريبي ومش تابع للشركة.'
+                  : 'Photo and link come from the public official site. This project is a demo and is not affiliated with the company.'}
+              </span>
+            </>
           )}
         </div>
       </section>

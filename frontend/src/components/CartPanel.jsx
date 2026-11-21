@@ -94,7 +94,8 @@ export default function CartPanel({ cart, onChange, customer }) {
     const lines = cart.map((c, i) =>
       `${i + 1}) ${c.name} - مقاس ${c.size}${c.color ? ` - ${c.color}` : ''} × ${c.quantity} = ${fmt(c.unit_price * c.quantity, 'egp', { compact: false })}`)
     return [
-      'طلب جديد من Cottonil Assistant 🛍️ / New order',
+      'طلب تجريبي (Demo) - مشروع تعليمي، مش متجر كوتونيل الرسمي',
+      'Demo order - learning project, not the official Cottonil store',
       ...lines,
       deal ? `العرض / Offer: ${deal.offer.title_ar} (− ${fmt(deal.saving, 'egp', { compact: false })})` : '',
       `الإجمالي / Total: ${fmt(total, 'egp', { compact: false })} (${units} قطعة)`,
@@ -150,6 +151,7 @@ export default function CartPanel({ cart, onChange, customer }) {
           <a className="whatsapp-btn" href={whatsappUrl} target="_blank" rel="noreferrer">
             WhatsApp order · اطلب واتساب
           </a>
+          <div className="demo-note" dir="auto">Demo: no real order is placed · ديمو: مفيش أوردر حقيقي بيتعمل</div>
           <button className="link-btn small" onClick={() => onChange([])}>Empty cart · فضّي السلة</button>
         </>
       )}

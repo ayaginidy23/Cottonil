@@ -1,32 +1,41 @@
 // =============================================================================
-// MapChart.jsx - "type: map" in an app YAML: one bubble per Egyptian governorate
+// MapChart.jsx - "type: map" in an app YAML: one point per Egyptian governorate
 // -----------------------------------------------------------------------------
 //   x:      column with the governorate name (Arabic or English, as in the data)
-//   series: [{key, label, format?}]  - the FIRST series sets the bubble size,
-//           every series is shown in the popup
+//   series: [{key, label, format?}]  - the FIRST series ranks the governorates;
+//           every series is shown in the card that opens on click
+// Look: satellite background, a small white point + name per governorate, and
+// the top governorate in orange. Click a point for its numbers (value, share of
+// the total, rank). The Nile Delta is crowded, so at country zoom only the
+// biggest names are written; zoom in (or press "Delta & Cairo") to see them all.
 // The governorate is placed at its capital city. Names are compared after
 // normalising Arabic spelling (أ/إ/ا, ة/ه, ى/ي, "محافظة"), and big cities that
 // appear instead of a governorate (طنطا، المنصورة...) map to their governorate.
-// Map tiles come from OpenStreetMap (needs internet in the browser); without
-// internet the bubbles are still drawn on an empty background.
+// Satellite tiles come from Esri World Imagery (needs internet in the browser);
+// without internet the points are still drawn on an empty background.
 // =============================================================================
-import { CircleMarker, MapContainer, TileLayer, Tooltip } from 'react-leaflet'
+import { useState } from 'react'
+import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { fmt } from '../lib/format.js'
-import { SERIES } from '../lib/colors.js'
 import { useLang } from '../lib/i18n.jsx'
 
-// [lat, lng] of each governorate's capital
+// [lat, lng] of each governorate's capital + its English name
 const GOVERNORATES = {
-  'القاهره': [30.0444, 31.2357], 'الجيزه': [29.987, 31.2118], 'الاسكندريه': [31.2001, 29.9187],
-  'القليوبيه': [30.466, 31.1858], 'الشرقيه': [30.5877, 31.502], 'الدقهليه': [31.0409, 31.3785],
-  'الغربيه': [30.7865, 31.0004], 'المنوفيه': [30.5972, 30.9876], 'البحيره': [31.0341, 30.4682],
-  'كفر الشيخ': [31.1107, 30.9388], 'دمياط': [31.4175, 31.8144], 'بورسعيد': [31.2653, 32.3019],
-  'الاسماعيليه': [30.5965, 32.2715], 'السويس': [29.9668, 32.5498], 'الفيوم': [29.3084, 30.8428],
-  'بني سويف': [29.0661, 31.0994], 'المنيا': [28.0871, 30.7618], 'اسيوط': [27.1783, 31.1859],
-  'سوهاج': [26.5591, 31.6957], 'قنا': [26.1551, 32.716], 'الاقصر': [25.6872, 32.6396],
-  'اسوان': [24.0889, 32.8998], 'البحر الاحمر': [27.2579, 33.8116], 'الوادي الجديد': [25.439, 30.5586],
-  'مطروح': [31.3543, 27.2373], 'شمال سيناء': [31.1316, 33.7984], 'جنوب سيناء': [27.9158, 34.33],
+  'القاهره': [30.0444, 31.2357, 'Cairo'], 'الجيزه': [29.987, 31.2118, 'Giza'],
+  'الاسكندريه': [31.2001, 29.9187, 'Alexandria'], 'القليوبيه': [30.466, 31.1858, 'Qalyubia'],
+  'الشرقيه': [30.5877, 31.502, 'Sharqia'], 'الدقهليه': [31.0409, 31.3785, 'Dakahlia'],
+  'الغربيه': [30.7865, 31.0004, 'Gharbia'], 'المنوفيه': [30.5972, 30.9876, 'Monufia'],
+  'البحيره': [31.0341, 30.4682, 'Beheira'], 'كفر الشيخ': [31.1107, 30.9388, 'Kafr El Sheikh'],
+  'دمياط': [31.4175, 31.8144, 'Damietta'], 'بورسعيد': [31.2653, 32.3019, 'Port Said'],
+  'الاسماعيليه': [30.5965, 32.2715, 'Ismailia'], 'السويس': [29.9668, 32.5498, 'Suez'],
+  'الفيوم': [29.3084, 30.8428, 'Faiyum'], 'بني سويف': [29.0661, 31.0994, 'Beni Suef'],
+  'المنيا': [28.0871, 30.7618, 'Minya'], 'اسيوط': [27.1783, 31.1859, 'Asyut'],
+  'سوهاج': [26.5591, 31.6957, 'Sohag'], 'قنا': [26.1551, 32.716, 'Qena'],
+  'الاقصر': [25.6872, 32.6396, 'Luxor'], 'اسوان': [24.0889, 32.8998, 'Aswan'],
+  'البحر الاحمر': [27.2579, 33.8116, 'Red Sea'], 'الوادي الجديد': [25.439, 30.5586, 'New Valley'],
+  'مطروح': [31.3543, 27.2373, 'Matrouh'], 'شمال سيناء': [31.1316, 33.7984, 'North Sinai'],
+  'جنوب سيناء': [27.9158, 34.33, 'South Sinai'],
 }
 // cities / English names that may appear instead of the Arabic governorate name
 const ALIASES = {
@@ -43,6 +52,13 @@ const ALIASES = {
   'north sinai': 'شمال سيناء', 'south sinai': 'جنوب سيناء',
 }
 
+const EGYPT = [[23.6, 28.6], [31.7, 34.4]]          // the Nile valley + Sinai (where the points are)
+const DELTA = [[29.8, 29.75], [31.6, 32.7]]            // Cairo, Giza, the Delta and the canal cities
+const LABEL_ALL_ZOOM = 7                              // from this zoom the Delta names are written too
+// points that sit almost on top of a neighbour get their name on another side
+const LABEL_SIDE = { 'الجيزه': 'bottom', 'القليوبيه': 'top', 'المنوفيه': 'opposite', 'بني سويف': 'opposite' }
+const inDelta = (lat, lng) => lat >= DELTA[0][0] && lat <= DELTA[1][0] && lng >= DELTA[0][1] && lng <= DELTA[1][1]
+
 function normalise(name) {
   return String(name || '')
     .toLowerCase()
@@ -52,43 +68,106 @@ function normalise(name) {
     .replace(/\s+/g, ' ').trim()
 }
 
-export function locate(name) {
+function lookup(name) {
   const n = normalise(name)
   const key = GOVERNORATES[n] ? n : ALIASES[n]
   return key ? GOVERNORATES[key] : null
 }
 
+export function locate(name) {
+  const g = lookup(name)
+  return g ? [g[0], g[1]] : null
+}
+
+// keeps the current zoom in React state (labels depend on it)
+function ZoomWatcher({ onZoom }) {
+  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) })
+  return null
+}
+
 export default function MapChart({ chart }) {
-  const { tl } = useLang()
+  const { lang, tl } = useLang()
+  const ar = lang === 'ar'
+  const [map, setMap] = useState(null)
+  const [zoom, setZoom] = useState(5)
   const { data = [], x, series = [], format } = chart
   const main = series[0]
   if (!main) return null
-  const points = data
-    .map((r) => ({ row: r, pos: locate(r[x]), value: Number(r[main.key]) || 0 }))
-  const placed = points.filter((p) => p.pos)
-  const missing = points.filter((p) => !p.pos).map((p) => p.row[x]).filter(Boolean)
-  const max = Math.max(...placed.map((p) => Math.abs(p.value)), 1)
+
+  const points = data.map((r) => {
+    const n = normalise(r[x])
+    const key = GOVERNORATES[n] ? n : ALIASES[n]
+    return { row: r, key, g: key ? GOVERNORATES[key] : null, value: Number(r[main.key]) || 0 }
+  })
+  const placed = points.filter((p) => p.g).sort((a, b) => b.value - a.value)
+  const missing = points.filter((p) => !p.g).map((p) => p.row[x]).filter(Boolean)
+  const total = placed.reduce((s, p) => s + p.value, 0)
+  const name = (p) => (ar ? String(p.row[x]) : p.g[2])
+  // draw the biggest last so it is on top
+  const drawOrder = [...placed].reverse()
 
   return (
     <div className="map-wrap">
-      <MapContainer center={[27.2, 30.8]} zoom={5} scrollWheelZoom={false} className="map" attributionControl>
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        />
-        {placed.map((p) => (
-          <CircleMarker key={p.row[x]} center={p.pos}
-            radius={6 + 24 * Math.sqrt(Math.abs(p.value) / max)}      // area grows with the value
-            pathOptions={{ color: SERIES[0], fillColor: SERIES[0], fillOpacity: 0.45, weight: 1.5 }}>
-            <Tooltip direction="top">
-              <div dir="auto"><strong>{p.row[x]}</strong></div>
-              {series.map((s) => (
-                <div key={s.key}>{tl(s.label)}: {fmt(p.row[s.key], s.format || format, { compact: false })}</div>
-              ))}
-            </Tooltip>
-          </CircleMarker>
-        ))}
-      </MapContainer>
+      <div className="map-box">
+        <MapContainer bounds={EGYPT} scrollWheelZoom={false} className="map" attributionControl ref={setMap}>
+          <TileLayer
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            attribution="Tiles &copy; Esri"
+            maxZoom={12}
+          />
+          <ZoomWatcher onZoom={setZoom} />
+          {drawOrder.map((p) => {
+            const rank = placed.indexOf(p) + 1
+            const top = rank === 1
+            // whole country: the top name + names outside the crowded Delta; zoomed in: every name
+            const showLabel = top || !inDelta(p.g[0], p.g[1]) || zoom >= LABEL_ALL_ZOOM
+            const side = LABEL_SIDE[p.key] === 'opposite' ? (ar ? 'right' : 'left') : (LABEL_SIDE[p.key] || (ar ? 'left' : 'right'))
+            const offset = { left: [-8, 0], right: [8, 0], top: [0, -8], bottom: [0, 8] }[side]
+            return (
+              <CircleMarker key={p.row[x]} center={[p.g[0], p.g[1]]} radius={top ? 8 : 6}
+                pathOptions={{ color: '#ffffff', weight: 2, fillColor: top ? '#f5a524' : '#ffffff', fillOpacity: 1 }}>
+                {showLabel && (
+                  <Tooltip permanent direction={side} offset={offset}
+                    className={`map-label ${top ? 'top' : ''}`}>
+                    {name(p)}
+                  </Tooltip>
+                )}
+                <Popup className="map-popup" closeButton={false}>
+                  <div dir={ar ? 'rtl' : 'ltr'}>
+                    <div className="map-pop-title">{name(p)}</div>
+                    {series.map((s) => (
+                      <div key={s.key} className="map-pop-row">
+                        <span>{tl(s.label)}</span>
+                        <strong>{fmt(p.row[s.key], s.format || format, { compact: false })}</strong>
+                      </div>
+                    ))}
+                    {total > 0 && (
+                      <div className="map-pop-row">
+                        <span>{ar ? 'النسبة من الإجمالي' : 'Share of total'}</span>
+                        <strong>{fmt(p.value / total, 'pct')}</strong>
+                      </div>
+                    )}
+                    <div className="map-pop-rank">
+                      {ar ? `المركز ${rank} من ${placed.length}` : `Rank ${rank} of ${placed.length}`}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            )
+          })}
+        </MapContainer>
+        <div className="map-zoom no-print">
+          <button className="chip" onClick={() => map?.flyToBounds(EGYPT, { duration: 0.6 })}>
+            {ar ? 'مصر كلها' : 'All Egypt'}
+          </button>
+          <button className="chip" onClick={() => map?.flyToBounds(DELTA, { duration: 0.6 })}>
+            {ar ? 'الدلتا والقاهرة' : 'Delta & Cairo'}
+          </button>
+        </div>
+      </div>
+      <div className="muted small">
+        {ar ? 'اضغط على أي نقطة تشوف أرقامها. البرتقالي = الأعلى.' : 'Click a point to see its numbers. Orange = the highest.'}
+      </div>
       {missing.length > 0 && (
         <div className="muted small">Not on the map (unknown name): {missing.join(', ')}</div>
       )}

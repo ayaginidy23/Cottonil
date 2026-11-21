@@ -34,7 +34,7 @@ charts:
     width: full
     format: number
     x: governorate
-    note: Bubble size = registered customers living in the governorate. Compare it with the number of branches (hover a bubble) to spot governorates that need another branch.
+    note: One point per governorate (orange = most registered customers). Click a point to compare customers with branches and spot governorates that need another branch.
     series:
       - {key: customers, label: Registered customers}
       - {key: branches, label: Branches}
